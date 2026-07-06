@@ -92,6 +92,8 @@ class VerificacionController extends Controller
 
     public function registrarRostro(Request $request)
     {
+        $resultadoLog = '';
+        $dniLog = '';
         try {
             $data = $request->validate([
                 'dni'     => 'required|string',
@@ -101,9 +103,13 @@ class VerificacionController extends Controller
                 'foto'    => 'required|image',
             ]);
 
+            $dniLog = $data['dni'];
+
             // Validar que el DNI no exista
             $existente = Alumno::where('dni', $data['dni'])->first();
             if ($existente) {
+                $resultadoLog = 'Registro fallido: DNI ya registrado';
+                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
                 return response()->json([
                     'detalle' => 'Ya existe un alumno registrado con el DNI ' . $data['dni'],
                 ], 409);
@@ -117,6 +123,8 @@ class VerificacionController extends Controller
             $foto->move($tempDir, $filename);
 
             if (!file_exists($imagePath)) {
+                $resultadoLog = 'Registro fallido: No se pudo guardar imagen temporal';
+                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
                 return response()->json([
                     'detalle' => 'No se pudo guardar la imagen temporal',
                 ], 500);
@@ -126,6 +134,8 @@ class VerificacionController extends Controller
 
             if (!$result['success']) {
                 if (file_exists($imagePath)) unlink($imagePath);
+                $resultadoLog = 'Registro fallido: Error del motor - ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido');
+                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
                 return response()->json([
                     'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
                 ], 422);
@@ -135,6 +145,8 @@ class VerificacionController extends Controller
 
             if (!$output || !$output['success']) {
                 if (file_exists($imagePath)) unlink($imagePath);
+                $resultadoLog = 'Registro fallido: ' . ($output['error'] ?? 'No se detectó rostro en la imagen');
+                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
                 return response()->json([
                     'detalle' => $output['error'] ?? 'No se detectó rostro en la imagen',
                 ], 400);
@@ -146,6 +158,8 @@ class VerificacionController extends Controller
             $busqueda = $this->buscarAlumnoPorEmbedding($embedding);
             if ($busqueda['alumno'] && $busqueda['distancia'] < 0.35) {
                 if (file_exists($imagePath)) unlink($imagePath);
+                $resultadoLog = 'Registro fallido: Rostro ya registrado con DNI ' . $busqueda['alumno']->dni;
+                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
                 return response()->json([
                     'detalle' => 'Este rostro ya está registrado con el DNI ' . $busqueda['alumno']->dni . ' (' . $busqueda['alumno']->nombre . ')',
                 ], 409);
@@ -168,8 +182,15 @@ class VerificacionController extends Controller
                 'vector_rostro' => \DB::raw("'$vectorStr'::vector"),
             ]);
 
+            $resultadoLog = 'Registro exitoso';
+            RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
+
             return response()->json(['mensaje' => 'Alumno registrado correctamente']);
         } catch (\Exception $e) {
+            if (!$resultadoLog) {
+                $resultadoLog = 'Registro fallido: Error interno - ' . $e->getMessage();
+                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
+            }
             return response()->json([
                 'detalle' => $this->sanitizar('Error interno: ' . $e->getMessage()),
             ], 500);
@@ -191,6 +212,8 @@ class VerificacionController extends Controller
         if (file_exists($imagePath)) unlink($imagePath);
 
         if (!$result['success']) {
+            $resultadoLog = 'Verificación fallida: Error del motor - ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido');
+            RegistroAcceso::create(['dni' => '—', 'resultado' => $resultadoLog, 'distancia' => null]);
             return response()->json([
                 'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
             ], 422);
@@ -199,6 +222,8 @@ class VerificacionController extends Controller
         $output = json_decode($result['output'], true);
 
         if (!$output || !$output['success']) {
+            $resultadoLog = 'Verificación fallida: ' . ($output['error'] ?? 'No se detectó rostro');
+            RegistroAcceso::create(['dni' => '—', 'resultado' => $resultadoLog, 'distancia' => null]);
             return response()->json([
                 'detalle' => $output['error'] ?? 'No se detectó rostro',
             ], 400);
@@ -211,11 +236,10 @@ class VerificacionController extends Controller
         $mejorDist = $busqueda['distancia'];
         $umbral = 0.70;
 
-        $resultado = '';
         $exitoso = false;
 
         if ($mejor && $mejorDist <= $umbral) {
-            $resultado = 'Verificación Exitosa';
+            $resultado = 'Verificación exitosa';
             $exitoso = true;
             $nombre = $mejor->nombre;
             $carrera = $mejor->carrera;
@@ -223,7 +247,7 @@ class VerificacionController extends Controller
             $dni = $mejor->dni;
             $fotoUrl = $mejor->foto_path ? asset('storage/fotos/' . $mejor->foto_path) : null;
         } else {
-            $resultado = 'Coincidencia no encontrada';
+            $resultado = 'Verificación fallida: Coincidencia no encontrada';
             $nombre = '—';
             $carrera = '—';
             $aulaNombre = '—';

@@ -1,5 +1,6 @@
 <template>
   <div class="flex flex-col gap-4">
+    <!-- Stats cards -->
     <div class="flex gap-4 flex-wrap">
       <Card class="flex-1 min-w-[180px]">
         <template #content>
@@ -26,44 +27,52 @@
         </template>
       </Card>
     </div>
+
+    <!-- Charts -->
     <div class="flex flex-col lg:flex-row gap-4">
-      <div class="flex-1">
-        <Card>
-          <template #title>Registros por Hora</template>
-          <template #content>
-            <canvas ref="chartCanvas" height="200"></canvas>
+      <Card class="flex-1">
+        <template #title>Registros por Hora</template>
+        <template #content>
+          <canvas ref="chartBarCanvas" height="220"></canvas>
+        </template>
+      </Card>
+      <Card class="lg:min-w-[300px] lg:max-w-[380px] flex flex-col items-center justify-center">
+        <template #title>Resultados</template>
+        <template #content>
+          <canvas ref="chartPieCanvas" height="220"></canvas>
+        </template>
+      </Card>
+    </div>
+
+    <!-- Logs table -->
+    <div class="flex flex-col gap-2">
+      <div class="flex gap-2">
+        <InputText v-model="filtroDni" placeholder="Filtrar por DNI" class="flex-1" />
+        <Button label="Exportar CSV" icon="pi pi-download" severity="secondary" @click="exportar" />
+      </div>
+      <DataTable
+        :value="logs"
+        paginator
+        :rows="10"
+        :rowsPerPageOptions="[5, 10, 25]"
+        size="small"
+        stripedRows
+        scrollable
+        scrollHeight="400px"
+      >
+        <Column field="id" header="ID" style="width: 50px" />
+        <Column field="alumno_nombre" header="Alumno" />
+        <Column field="alumno_dni" header="DNI" style="width: 100px" />
+        <Column field="resultado" header="Resultado" style="width: 220px">
+          <template #body="{ data }">
+            <Tag
+              :severity="String(data.resultado).toLowerCase().includes('exitos') ? 'success' : 'danger'"
+              :value="data.resultado"
+            />
           </template>
-        </Card>
-      </div>
-      <div class="flex flex-col gap-2 lg:min-w-[350px]">
-        <div class="flex gap-2">
-          <InputText v-model="filtroDni" placeholder="Filtrar por DNI" class="flex-1" />
-          <Button label="Exportar CSV" icon="pi pi-download" severity="secondary" @click="exportar" />
-        </div>
-        <DataTable
-          :value="logs"
-          paginator
-          :rows="10"
-          :rowsPerPageOptions="[5, 10, 25]"
-          size="small"
-          stripedRows
-          scrollable
-          scrollHeight="400px"
-        >
-          <Column field="id" header="ID" style="width: 50px" />
-          <Column field="alumno_nombre" header="Alumno" />
-          <Column field="alumno_dni" header="DNI" style="width: 100px" />
-          <Column field="resultado" header="Resultado" style="width: 120px">
-            <template #body="{ data }">
-              <Tag
-                :severity="String(data.resultado).includes('exitos') ? 'success' : 'danger'"
-                :value="data.resultado"
-              />
-            </template>
-          </Column>
-          <Column field="creado_en" header="Fecha" style="width: 160px" />
-        </DataTable>
-      </div>
+        </Column>
+        <Column field="creado_en" header="Fecha" style="width: 160px" />
+      </DataTable>
     </div>
   </div>
 </template>
@@ -73,11 +82,13 @@ import { ref, onMounted, watch } from 'vue';
 import Chart from 'chart.js/auto';
 import API from '../services/api';
 
-const chartCanvas = ref(null);
+const chartBarCanvas = ref(null);
+const chartPieCanvas = ref(null);
 const logs = ref([]);
 const filtroDni = ref('');
 const stats = ref({ total: 0, exitosos: 0, fallidos: 0 });
-let chart = null;
+let chartBar = null;
+let chartPie = null;
 
 async function cargarLogs() {
     try {
@@ -86,13 +97,14 @@ async function cargarLogs() {
         const data = await API.obtenerLogs(params);
         logs.value = data;
         stats.value.total = data.length;
-        stats.value.exitosos = data.filter((r) => r.resultado && r.resultado.includes('exitos')).length;
+        stats.value.exitosos = data.filter((r) => r.resultado && r.resultado.toLowerCase().includes('exitos')).length;
         stats.value.fallidos = stats.value.total - stats.value.exitosos;
-        actualizarGrafico(data);
+        actualizarGraficoBarra(data);
+        actualizarGraficoCircular(stats.value.exitosos, stats.value.fallidos);
     } catch { }
 }
 
-function actualizarGrafico(data) {
+function actualizarGraficoBarra(data) {
     const horas = Array.from({ length: 24 }, (_, i) => `${i}h`);
     const conteo = Array(24).fill(0);
     data.forEach((r) => {
@@ -101,9 +113,9 @@ function actualizarGrafico(data) {
             if (h >= 0 && h < 24) conteo[h]++;
         }
     });
-    if (chart) chart.destroy();
-    if (chartCanvas.value) {
-        chart = new Chart(chartCanvas.value, {
+    if (chartBar) chartBar.destroy();
+    if (chartBarCanvas.value) {
+        chartBar = new Chart(chartBarCanvas.value, {
             type: 'bar',
             data: {
                 labels: horas,
@@ -113,6 +125,30 @@ function actualizarGrafico(data) {
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
+            },
+        });
+    }
+}
+
+function actualizarGraficoCircular(exitosos, fallidos) {
+    if (chartPie) chartPie.destroy();
+    if (chartPieCanvas.value) {
+        chartPie = new Chart(chartPieCanvas.value, {
+            type: 'doughnut',
+            data: {
+                labels: ['Exitosos', 'Fallidos'],
+                datasets: [{
+                    data: [exitosos, fallidos],
+                    backgroundColor: ['#22c55e', '#ef4444'],
+                    borderWidth: 0,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' },
+                },
             },
         });
     }
