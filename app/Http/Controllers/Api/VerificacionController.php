@@ -1,0 +1,286 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Alumno;
+use App\Models\RegistroAcceso;
+use Illuminate\Http\Request;
+use Symfony\Component\Process\Process;
+
+class VerificacionController extends Controller
+{
+    private function ejecutarPython(array $args): array
+    {
+        $pythonPath = base_path('python/face_helper.py');
+        $command = array_merge(['python', $pythonPath], $args);
+
+        $process = new Process($command);
+        $process->setTimeout(30);
+
+        $userProfile = $_SERVER['USERPROFILE'] ?? $_ENV['USERPROFILE'] ?? 'C:\\Users\\PC-01';
+        $process->setEnv([
+            'USERPROFILE' => $userProfile,
+            'HOME' => $userProfile,
+        ]);
+
+        $process->run();
+
+        $output = $process->getOutput();
+        $error = $process->getErrorOutput();
+
+        $lines = array_filter(array_map('trim', explode("\n", $output)));
+        $jsonLine = '';
+        foreach (array_reverse($lines) as $line) {
+            if (str_starts_with($line, '{') || str_starts_with($line, '[')) {
+                $jsonLine = $line;
+                break;
+            }
+        }
+
+        return [
+            'success' => $process->isSuccessful(),
+            'output' => $jsonLine ?: $output,
+            'error' => $error,
+        ];
+    }
+
+    private function sanitizar(string $texto): string
+    {
+        return mb_convert_encoding($texto, 'UTF-8', 'UTF-8');
+    }
+
+    private function cosineDistance($a, $b)
+    {
+        $dot = 0;
+        $normA = 0;
+        $normB = 0;
+        $n = count($a);
+        for ($i = 0; $i < $n; $i++) {
+            $dot += $a[$i] * $b[$i];
+            $normA += $a[$i] * $a[$i];
+            $normB += $b[$i] * $b[$i];
+        }
+        $normA = sqrt($normA);
+        $normB = sqrt($normB);
+        if ($normA == 0 || $normB == 0) return 2;
+        return 1 - ($dot / ($normA * $normB));
+    }
+
+    private function buscarAlumnoPorEmbedding(array $embedding)
+    {
+        $alumnos = Alumno::whereNotNull('vector_rostro')->get();
+        $mejor = null;
+        $mejorDist = 1.5;
+
+        foreach ($alumnos as $alumno) {
+            if (!$alumno->vector_rostro) continue;
+            // pgvector puede devolver [1,2,3] o {1,2,3}; normalizamos a JSON válido
+            $clean = str_replace(['{', '}'], ['[', ']'], $alumno->vector_rostro);
+            $dbVector = json_decode($clean);
+            if (!$dbVector) continue;
+
+            $dist = $this->cosineDistance($embedding, $dbVector);
+            if ($dist < $mejorDist) {
+                $mejorDist = $dist;
+                $mejor = $alumno;
+            }
+        }
+
+        return ['alumno' => $mejor, 'distancia' => $mejorDist];
+    }
+
+    public function registrarRostro(Request $request)
+    {
+        try {
+            $data = $request->validate([
+                'dni'     => 'required|string',
+                'nombre'  => 'required|string',
+                'carrera' => 'required|string',
+                'aula_id' => 'required|integer',
+                'foto'    => 'required|image',
+            ]);
+
+            // Validar que el DNI no exista
+            $existente = Alumno::where('dni', $data['dni'])->first();
+            if ($existente) {
+                return response()->json([
+                    'detalle' => 'Ya existe un alumno registrado con el DNI ' . $data['dni'],
+                ], 409);
+            }
+
+            $foto = $request->file('foto');
+            $filename = $data['dni'] . '_' . time() . '.jpg';
+
+            $tempDir = sys_get_temp_dir();
+            $imagePath = $tempDir . DIRECTORY_SEPARATOR . $filename;
+            $foto->move($tempDir, $filename);
+
+            if (!file_exists($imagePath)) {
+                return response()->json([
+                    'detalle' => 'No se pudo guardar la imagen temporal',
+                ], 500);
+            }
+
+            $result = $this->ejecutarPython(['registrar', $imagePath]);
+
+            if (!$result['success']) {
+                if (file_exists($imagePath)) unlink($imagePath);
+                return response()->json([
+                    'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
+                ], 422);
+            }
+
+            $output = json_decode($result['output'], true);
+
+            if (!$output || !$output['success']) {
+                if (file_exists($imagePath)) unlink($imagePath);
+                return response()->json([
+                    'detalle' => $output['error'] ?? 'No se detectó rostro en la imagen',
+                ], 400);
+            }
+
+            $embedding = $output['embedding'];
+
+            // Validar que no exista un rostro muy similar ya registrado (distancia < 0.35)
+            $busqueda = $this->buscarAlumnoPorEmbedding($embedding);
+            if ($busqueda['alumno'] && $busqueda['distancia'] < 0.35) {
+                if (file_exists($imagePath)) unlink($imagePath);
+                return response()->json([
+                    'detalle' => 'Este rostro ya está registrado con el DNI ' . $busqueda['alumno']->dni . ' (' . $busqueda['alumno']->nombre . ')',
+                ], 409);
+            }
+
+            $storedPath = storage_path('app/public/fotos/' . $filename);
+            if (!file_exists(dirname($storedPath))) {
+                mkdir(dirname($storedPath), 0755, true);
+            }
+            rename($imagePath, $storedPath);
+
+            $vectorStr = '[' . implode(',', $embedding) . ']';
+
+            Alumno::create([
+                'dni'           => $data['dni'],
+                'nombre'        => $data['nombre'],
+                'carrera'       => $data['carrera'],
+                'aula_id'       => $data['aula_id'],
+                'foto_path'     => $filename,
+                'vector_rostro' => \DB::raw("'$vectorStr'::vector"),
+            ]);
+
+            return response()->json(['mensaje' => 'Alumno registrado correctamente']);
+        } catch (\Exception $e) {
+            return response()->json([
+                'detalle' => $this->sanitizar('Error interno: ' . $e->getMessage()),
+            ], 500);
+        }
+    }
+
+    public function verificarRostro(Request $request)
+    {
+        $request->validate(['foto' => 'required|image']);
+        $foto = $request->file('foto');
+        $filename = 'temp_' . time() . '.jpg';
+
+        $tempDir = sys_get_temp_dir();
+        $imagePath = $tempDir . DIRECTORY_SEPARATOR . $filename;
+        $foto->move($tempDir, $filename);
+
+        $result = $this->ejecutarPython(['verificar', $imagePath]);
+
+        if (file_exists($imagePath)) unlink($imagePath);
+
+        if (!$result['success']) {
+            return response()->json([
+                'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
+            ], 422);
+        }
+
+        $output = json_decode($result['output'], true);
+
+        if (!$output || !$output['success']) {
+            return response()->json([
+                'detalle' => $output['error'] ?? 'No se detectó rostro',
+            ], 400);
+        }
+
+        $embedding = $output['embedding'];
+
+        $busqueda = $this->buscarAlumnoPorEmbedding($embedding);
+        $mejor = $busqueda['alumno'];
+        $mejorDist = $busqueda['distancia'];
+        $umbral = 0.70;
+
+        $resultado = '';
+        $exitoso = false;
+
+        if ($mejor && $mejorDist <= $umbral) {
+            $resultado = 'Verificación Exitosa';
+            $exitoso = true;
+            $nombre = $mejor->nombre;
+            $carrera = $mejor->carrera;
+            $aulaNombre = $mejor->aula?->nombre ?? '—';
+            $dni = $mejor->dni;
+            $fotoUrl = $mejor->foto_path ? asset('storage/fotos/' . $mejor->foto_path) : null;
+        } else {
+            $resultado = 'Coincidencia no encontrada';
+            $nombre = '—';
+            $carrera = '—';
+            $aulaNombre = '—';
+            $dni = '—';
+            $fotoUrl = null;
+        }
+
+        RegistroAcceso::create([
+            'dni'       => $dni,
+            'resultado' => $resultado,
+            'distancia' => $mejorDist,
+        ]);
+
+        return response()->json([
+            'exitoso'    => $exitoso,
+            'mensaje'    => $resultado,
+            'nombre'     => $nombre,
+            'carrera'    => $carrera,
+            'aula'       => $aulaNombre,
+            'dni'        => $dni,
+            'foto_url'   => $fotoUrl,
+            'distancia'  => $mejorDist,
+            'timestamp'  => now()->toDateTimeString(),
+        ]);
+    }
+
+    public function detectarRostroSimple(Request $request)
+    {
+        $request->validate(['file' => 'required|image']);
+        $foto = $request->file('file');
+        $filename = 'temp_detect_' . time() . '.jpg';
+
+        $tempDir = sys_get_temp_dir();
+        $imagePath = $tempDir . DIRECTORY_SEPARATOR . $filename;
+        $foto->move($tempDir, $filename);
+
+        if (!file_exists($imagePath)) {
+            return response()->json([
+                'rostro_detectado' => false,
+                'mensaje' => 'Error interno: no se pudo guardar imagen temporal',
+            ]);
+        }
+
+        $result = $this->ejecutarPython(['validar', $imagePath]);
+
+        $output = json_decode($result['output'], true);
+
+        if (file_exists($imagePath)) unlink($imagePath);
+
+        $mensaje = $output['mensaje'] ?? 'Rostro no detectado';
+        if (!$result['success']) {
+            $mensaje = $this->sanitizar('Error motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido'));
+        }
+
+        return response()->json([
+            'rostro_detectado' => ($output['valido'] ?? false) && $result['success'],
+            'mensaje'          => $mensaje,
+        ]);
+    }
+}
