@@ -81,6 +81,7 @@ const menuItems = [
     { path: '/lista', label: 'Lista de Alumnos', icon: 'pi pi-list' },
     { path: '/reportes', label: 'Reportes', icon: 'pi pi-chart-bar' },
     { path: '/coordinadores', label: 'Coordinadores', icon: 'pi pi-users' },
+    { path: '/aulas', label: 'Aulas', icon: 'pi pi-building' },
 ];
 </script>
 

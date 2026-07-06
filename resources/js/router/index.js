@@ -9,6 +9,7 @@ import Reportes from '../views/Reportes.vue';
 import VistaAula from '../views/VistaAula.vue';
 import CoordinadorAulas from '../views/CoordinadorAulas.vue';
 import Coordinadores from '../views/Coordinadores.vue';
+import Aulas from '../views/Aulas.vue';
 
 const routes = [
     { path: '/login', name: 'Login', component: Login, meta: { public: true } },
@@ -21,6 +22,7 @@ const routes = [
     { path: '/reportes', name: 'Reportes', component: Reportes, meta: { rol: 'admin' } },
     { path: '/aula/:id', name: 'AulaAdmin', component: VistaAula, props: true, meta: { rol: 'admin' } },
     { path: '/coordinadores', name: 'Coordinadores', component: Coordinadores, meta: { rol: 'admin' } },
+    { path: '/aulas', name: 'Aulas', component: Aulas, meta: { rol: 'admin' } },
 
     // Rutas de Coordinador
     { path: '/coordinador', redirect: '/coordinador/verificar' },
