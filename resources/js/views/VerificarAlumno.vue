@@ -1,29 +1,67 @@
 <template>
-  <div class="flex flex-col lg:flex-row gap-4 max-w-5xl">
-    <div class="flex flex-col items-center gap-2">
-      <CameraView ref="cameraRef" :width="320" :height="240" />
+  <div class="flex flex-col lg:flex-row gap-6 max-w-6xl mx-auto">
+    <!-- Panel Cámara -->
+    <div class="flex flex-col items-center gap-3">
+      <CameraView ref="cameraRef" :width="360" :height="270" />
       <Button label="Encender / Apagar" icon="pi pi-camera" @click="toggleCam" severity="secondary" />
     </div>
-    <Card class="flex-1">
-      <template #title>Resultado</template>
+
+    <!-- Panel Resultado -->
+    <Card class="flex-1 min-h-[320px]">
+      <template #title>
+        <div class="flex items-center gap-2">
+          <i class="pi pi-id-card text-indigo-500"></i>
+          <span>Resultado de Verificación</span>
+        </div>
+      </template>
       <template #content>
-        <div v-if="resultado" class="flex flex-col items-center gap-3">
-          <Avatar :image="resultado.foto_url" size="xlarge" shape="circle" />
-          <div class="text-center">
-            <h3 class="text-xl font-bold">{{ resultado.nombre }}</h3>
-            <p class="text-sm text-gray-500">{{ resultado.carrera }} - {{ resultado.aula }}</p>
-            <p class="text-sm text-gray-400">DNI: {{ resultado.dni }}</p>
+        <!-- Resultado exitoso -->
+        <div v-if="resultado && resultado.exitoso" class="flex flex-col items-center gap-5 py-2">
+          <Avatar :image="resultado.foto_url" size="xlarge" shape="circle" class="w-28 h-28 shadow-lg" />
+          <div class="text-center space-y-1">
+            <h3 class="text-3xl font-bold text-gray-800">{{ resultado.nombre }}</h3>
+            <p class="text-lg text-gray-500">{{ resultado.carrera }}</p>
+            <p class="text-base text-gray-400 flex items-center justify-center gap-2">
+              <i class="pi pi-map-marker text-indigo-400"></i>
+              {{ resultado.aula }}
+            </p>
+            <p class="text-base text-gray-400 font-mono tracking-wide">DNI: {{ resultado.dni }}</p>
           </div>
-          <Tag :severity="resultado.exitoso ? 'success' : 'danger'" :value="resultado.mensaje" />
-          <small class="text-gray-400">{{ resultado.timestamp }}</small>
-          <small v-if="resultado.distancia !== undefined" class="text-gray-300">Distancia: {{ resultado.distancia.toFixed(4) }}</small>
+          <Tag severity="success" value="Verificación Exitosa" class="text-lg px-4 py-2" />
+          <div class="text-center space-y-1">
+            <p class="text-sm text-gray-400">{{ resultado.timestamp }}</p>
+            <p v-if="resultado.distancia !== undefined" class="text-xs text-gray-300">
+              Confianza: {{ (1 - resultado.distancia).toFixed(3) }}
+            </p>
+          </div>
         </div>
-        <div v-else-if="cargando" class="flex justify-center p-4">
-          <ProgressSpinner style="width: 40px; height: 40px" />
+
+        <!-- Resultado fallido -->
+        <div v-else-if="resultado && !resultado.exitoso" class="flex flex-col items-center gap-5 py-2">
+          <div class="w-28 h-28 rounded-full bg-red-50 flex items-center justify-center">
+            <i class="pi pi-times-circle text-red-400" style="font-size: 4rem"></i>
+          </div>
+          <div class="text-center space-y-1">
+            <h3 class="text-2xl font-bold text-gray-800">Coincidencia no encontrada</h3>
+            <p class="text-base text-gray-500">El rostro no está registrado en el sistema</p>
+          </div>
+          <Tag severity="danger" value="No registrado" class="text-lg px-4 py-2" />
+          <p class="text-sm text-gray-400">{{ resultado.timestamp }}</p>
         </div>
-        <div v-else class="text-center text-gray-400 p-4">
-          <i class="pi pi-camera" style="font-size: 2rem; opacity: 0.3"></i>
-          <p class="mt-2">Muestra tu rostro a la cámara para verificar</p>
+
+        <!-- Cargando -->
+        <div v-else-if="cargando" class="flex flex-col items-center justify-center gap-4 py-12">
+          <ProgressSpinner style="width: 60px; height: 60px" strokeWidth="4" />
+          <p class="text-gray-500 text-lg">Verificando rostro...</p>
+        </div>
+
+        <!-- Estado inicial -->
+        <div v-else class="flex flex-col items-center justify-center gap-4 py-12 text-gray-400">
+          <div class="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center">
+            <i class="pi pi-camera text-gray-300" style="font-size: 3rem"></i>
+          </div>
+          <p class="text-lg">Muestra tu rostro a la cámara para verificar</p>
+          <p class="text-sm text-gray-300">La verificación es automática</p>
         </div>
       </template>
     </Card>
@@ -48,7 +86,7 @@ onMounted(() => {
     setTimeout(() => {
         cameraRef.value?.toggleCam();
         iniciarVerificacionAutomatica();
-    }, 1500);
+    }, 1200);
 });
 
 onUnmounted(() => {
@@ -70,7 +108,7 @@ function iniciarVerificacionAutomatica() {
     intervaloVerificacion = setInterval(async () => {
         if (!cameraRef.value?.tieneStream() || cargando.value) return;
         await verificar();
-    }, 1800);
+    }, 2200);
 }
 
 function detenerVerificacionAutomatica() {
@@ -88,7 +126,7 @@ function programarLimpieza() {
     if (timeoutLimpiar) clearTimeout(timeoutLimpiar);
     timeoutLimpiar = setTimeout(() => {
         resultado.value = null;
-    }, 5000);
+    }, 6000);
 }
 
 async function verificar() {
@@ -96,7 +134,6 @@ async function verificar() {
 
     cargando.value = true;
     try {
-        // Usar captura a resolución nativa para mejor comparación
         const blob = await cameraRef.value.capturarFotoNativa();
         const fd = new FormData();
         fd.append('foto', blob, 'captura.jpg');
