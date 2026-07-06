@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import Password from 'primevue/password';
+import Checkbox from 'primevue/checkbox';
 import Tooltip from 'primevue/tooltip';
 import Aura from '@primeuix/themes/aura';
 import router from './router';
@@ -55,5 +56,6 @@ app.component('ProgressSpinner', ProgressSpinner);
 app.component('Avatar', Avatar);
 app.component('Badge', Badge);
 app.component('Password', Password);
+app.component('Checkbox', Checkbox);
 
 app.mount('#app');

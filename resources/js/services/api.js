@@ -11,11 +11,16 @@ async function request(method, path, data) {
     }
     const res = await fetch(`${BASE}${path}`, opts);
     const text = await res.text();
+    let json = null;
     try {
-        return JSON.parse(text);
+        json = JSON.parse(text);
     } catch {
-        throw new Error(text || `HTTP ${res.status}`);
+        // no es JSON
     }
+    if (!res.ok) {
+        throw new Error(json?.error || json?.message || text || `HTTP ${res.status}`);
+    }
+    return json;
 }
 
 export default {
@@ -54,5 +59,18 @@ export default {
         const fd = new FormData();
         fd.append('file', blob, 'f.jpg');
         return fetch(`${BASE}/detectar-rostro-simple`, { method: 'POST', body: fd }).then((r) => r.json());
+    },
+
+    // Coordinadores
+    obtenerCoordinadores: () => request('GET', '/coordinadores'),
+    crearCoordinador: (data) => request('POST', '/coordinadores', data),
+    editarCoordinador: (id, data) => request('PUT', `/coordinadores/${id}`, data),
+    eliminarCoordinador: (id) => request('DELETE', `/coordinadores/${id}`),
+    asignarAulasCoordinador: (id, data) => request('POST', `/coordinadores/${id}/aulas`, data),
+    obtenerMisAulas: (usuario) => {
+        return fetch(`${BASE}/coordinadores/mis-aulas`, {
+            method: 'GET',
+            headers: { 'X-Coordinador-Usuario': usuario },
+        }).then((r) => r.json());
     },
 };

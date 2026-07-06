@@ -74,14 +74,14 @@ const password = ref('');
 const error = ref('');
 const cargando = ref(false);
 
-function iniciarSesion() {
+async function iniciarSesion() {
     error.value = '';
     if (!usuario.value || !password.value) {
         error.value = 'Ingresa usuario y contraseña';
         return;
     }
     cargando.value = true;
-    const res = login(usuario.value, password.value);
+    const res = await login(usuario.value, password.value);
     cargando.value = false;
     if (res.exito) {
         if (res.rol === 'admin') {

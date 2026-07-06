@@ -12,4 +12,9 @@ class Aula extends Model
     {
         return $this->hasMany(Alumno::class);
     }
+
+    public function coordinadores()
+    {
+        return $this->belongsToMany(Coordinador::class, 'coordinador_aula');
+    }
 }

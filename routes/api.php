@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\AulaController;
 use App\Http\Controllers\Api\AlumnoController;
 use App\Http\Controllers\Api\VerificacionController;
 use App\Http\Controllers\Api\ReporteController;
+use App\Http\Controllers\Api\CoordinadorController;
 
 Route::get('/aulas', [AulaController::class, 'index']);
 Route::post('/aulas', [AulaController::class, 'store']);
@@ -23,3 +24,11 @@ Route::post('/detectar-rostro-simple', [VerificacionController::class, 'detectar
 
 Route::get('/reportes/logs', [ReporteController::class, 'logs']);
 Route::get('/reportes/exportar', [ReporteController::class, 'exportar']);
+
+Route::get('/coordinadores', [CoordinadorController::class, 'index']);
+Route::post('/coordinadores', [CoordinadorController::class, 'store']);
+Route::put('/coordinadores/{id}', [CoordinadorController::class, 'update']);
+Route::delete('/coordinadores/{id}', [CoordinadorController::class, 'destroy']);
+Route::post('/coordinadores/{id}/aulas', [CoordinadorController::class, 'asignarAulas']);
+Route::get('/coordinadores/mis-aulas', [CoordinadorController::class, 'misAulas']);
+Route::post('/coordinadores/login', [CoordinadorController::class, 'login']);
