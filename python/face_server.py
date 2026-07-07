@@ -144,26 +144,37 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
-        if self.path != '/verificar':
-            self.send_response(404)
-            self.end_headers()
-            return
-
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length == 0:
-                self.send_response(400)
+            if self.path == '/reload':
+                log("[FaceServer] Recargando embeddings desde BD...")
+                EMBEDDINGS_DB.clear()
+                cargar_embeddings_desde_bd()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
+                self.wfile.write(json.dumps({'success': True, 'mensaje': f'{len(EMBEDDINGS_DB)} embeddings recargados'}).encode())
                 return
 
-            body = self.rfile.read(content_length)
-            resultado = procesar_imagen(body)
+            if self.path == '/verificar':
+                content_length = int(self.headers.get('Content-Length', 0))
+                if content_length == 0:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
 
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+                body = self.rfile.read(content_length)
+                resultado = procesar_imagen(body)
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(resultado).encode())
+                return
+
+            self.send_response(404)
             self.end_headers()
-            self.wfile.write(json.dumps(resultado).encode())
 
         except Exception as e:
             log(f"[FaceServer] ERROR en request: {e}")

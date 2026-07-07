@@ -91,6 +91,22 @@ class VerificacionController extends Controller
         return ['alumno' => $mejor, 'distancia' => $mejorDist];
     }
 
+    private function recargarServidorPython()
+    {
+        try {
+            $ch = curl_init('http://127.0.0.1:5001/reload');
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, '');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 3);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+            curl_exec($ch);
+            curl_close($ch);
+        } catch (\Exception $e) {
+            // Silencioso: si el servidor no esta corriendo, no importa
+        }
+    }
+
     public function registrarRostro(Request $request)
     {
         $resultadoLog = '';
@@ -180,6 +196,9 @@ class VerificacionController extends Controller
                 'foto_path'     => $filename,
                 'vector_rostro' => \DB::raw("'$vectorStr'::vector"),
             ]);
+
+            // Notificar al servidor Python para recargar embeddings
+            $this->recargarServidorPython();
 
             $resultadoLog = 'Registro exitoso';
             RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
