@@ -16,23 +16,36 @@
         :rows="15"
         stripedRows
         size="small"
+        class="w-full"
+        tableStyle="min-width: 100%"
       >
-        <Column field="id" header="ID" style="width: 60px" />
-        <Column field="dni" header="DNI" style="width: 100px" />
-        <Column field="nombre" header="Nombre" />
-        <Column field="carrera" header="Carrera" />
-        <Column header="Estado" style="width: 100px">
+        <Column field="id" style="width: 3rem; text-align: center">
+          <template #header><div class="w-full text-center">ID</div></template>
+        </Column>
+        <Column field="dni" style="width: 7rem; text-align: center">
+          <template #header><div class="w-full text-center">DNI</div></template>
+        </Column>
+        <Column field="nombre" style="min-width: 14rem; width: 25%; text-align: center">
+          <template #header><div class="w-full text-center">Nombre</div></template>
+        </Column>
+        <Column field="carrera" style="min-width: 12rem; width: 25%; text-align: center">
+          <template #header><div class="w-full text-center">Carrera</div></template>
+        </Column>
+        <Column style="width: 7rem; text-align: center" v-if="auth.isCoordinador">
+          <template #header><div class="w-full text-center">Estado</div></template>
           <template #body="{ data }">
             <Tag :value="data.estado || 'Faltó'" :severity="(data.estado || 'Faltó') === 'Asistió' ? 'success' : 'danger'" />
           </template>
         </Column>
-        <Column header="Foto" style="width: 70px">
+        <Column style="width: 4rem; text-align: center">
+          <template #header><div class="w-full text-center">Foto</div></template>
           <template #body="{ data }">
-            <Avatar v-if="data.foto_url" :image="data.foto_url" shape="circle" size="large" />
-            <Avatar v-else icon="pi pi-user" shape="circle" size="large" />
+            <Avatar v-if="data.foto_url" :image="data.foto_url" shape="circle" size="normal" />
+            <Avatar v-else icon="pi pi-user" shape="circle" size="normal" />
           </template>
         </Column>
-        <Column header="Acciones" style="width: 100px">
+        <Column style="width: 4rem; text-align: center">
+          <template #header><div class="w-full text-center">Acciones</div></template>
           <template #body="{ data }">
             <Button icon="pi pi-pencil" severity="secondary" rounded size="small" @click="abrirEditar(data)" />
           </template>
@@ -68,6 +81,7 @@ import { ref, watch, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import API from '../services/api';
 import { useToast } from 'primevue/usetoast';
+import { auth } from '../stores/auth.js';
 
 const props = defineProps({ id: String });
 const route = useRoute();

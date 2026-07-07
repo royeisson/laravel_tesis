@@ -81,6 +81,7 @@ let faceMesh = null;
 const tracks = ref([]);
 let nextTrackId = 1;
 const cooldownPorDni = new Map();
+const yaMarcadosEnSesion = new Set();
 const COOLDOWN_MS = 4000;
 
 async function iniciarCamara() {
@@ -285,10 +286,11 @@ async function tickVerificacion() {
                         mejorTrack.lastUpdate = ahora;
                         mejorTrack.identityExpiresAt = ahora + 3000;
 
-                        if (r.es_mi_aula && r.estado !== 'Asistió') {
+                        if (r.es_mi_aula && r.estado !== 'Asistió' && !yaMarcadosEnSesion.has(r.dni)) {
                             const last = cooldownPorDni.get(r.dni);
                             if (!last || ahora - last > COOLDOWN_MS) {
                                 cooldownPorDni.set(r.dni, ahora);
+                                yaMarcadosEnSesion.add(r.dni);
                                 API.marcarAsistencia(r.dni).then(() => {
                                     toast.add({ severity: 'success', summary: 'Asistencia', detail: `${r.nombre} marcado como Asistió`, life: 2500 });
                                     cargarAlumnos();
