@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AlumnoController;
 use App\Http\Controllers\Api\VerificacionController;
 use App\Http\Controllers\Api\ReporteController;
 use App\Http\Controllers\Api\CoordinadorController;
+use App\Http\Controllers\Api\AsistenciaController;
 
 Route::get('/aulas', [AulaController::class, 'index']);
 Route::post('/aulas', [AulaController::class, 'store']);
@@ -20,6 +21,7 @@ Route::delete('/alumnos/{id}', [AlumnoController::class, 'destroy']);
 
 Route::post('/registrar-rostro', [VerificacionController::class, 'registrarRostro']);
 Route::post('/verificar-rostro', [VerificacionController::class, 'verificarRostro']);
+Route::post('/verificar-masivo', [VerificacionController::class, 'verificarMasivo']);
 Route::post('/detectar-rostro-simple', [VerificacionController::class, 'detectarRostroSimple']);
 
 Route::get('/reportes/logs', [ReporteController::class, 'logs']);
@@ -32,3 +34,7 @@ Route::delete('/coordinadores/{id}', [CoordinadorController::class, 'destroy']);
 Route::post('/coordinadores/{id}/aulas', [CoordinadorController::class, 'asignarAulas']);
 Route::get('/coordinadores/mis-aulas', [CoordinadorController::class, 'misAulas']);
 Route::post('/coordinadores/login', [CoordinadorController::class, 'login']);
+
+Route::get('/asistencia/aula/{aulaId}', [AsistenciaController::class, 'listarPorAula']);
+Route::post('/asistencia/marcar', [AsistenciaController::class, 'marcar']);
+Route::post('/asistencia/reset', [AsistenciaController::class, 'reset']);

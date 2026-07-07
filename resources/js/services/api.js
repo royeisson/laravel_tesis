@@ -61,6 +61,19 @@ export default {
         return fetch(`${BASE}/detectar-rostro-simple`, { method: 'POST', body: fd }).then((r) => r.json());
     },
 
+    // Verificación masiva
+    verificarMasivo: (formData, usuario) =>
+        fetch(`${BASE}/verificar-masivo`, {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-Coordinador-Usuario': usuario || '' },
+        }).then((r) => r.json()),
+
+    // Asistencia
+    listarAsistenciaPorAula: (aulaId) => request('GET', `/asistencia/aula/${aulaId}`),
+    marcarAsistencia: (dni) => request('POST', '/asistencia/marcar', { dni }),
+    resetAsistencia: (aulaId) => request('POST', '/asistencia/reset', { aula_id: aulaId }),
+
     // Coordinadores
     obtenerCoordinadores: () => request('GET', '/coordinadores'),
     crearCoordinador: (data) => request('POST', '/coordinadores', data),

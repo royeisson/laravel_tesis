@@ -7,6 +7,7 @@
         :paginator="true"
         :rows="15"
         :rowsPerPageOptions="[10, 15, 25, 50]"
+        v-model:filters="filters"
         :globalFilterFields="['nombre', 'dni', 'carrera', 'aula_nombre']"
         sortField="id"
         :sortOrder="-1"
@@ -15,7 +16,7 @@
       >
         <template #header>
           <div class="flex justify-end">
-            <InputText v-model="filtro" placeholder="Buscar..." class="w-80" />
+            <InputText v-model="filters.global.value" placeholder="Buscar..." class="w-80" />
           </div>
         </template>
         <Column field="id" header="ID" sortable style="width: 60px" />
@@ -25,7 +26,8 @@
         <Column field="aula_nombre" header="Aula" sortable />
         <Column header="Foto" style="width: 70px">
           <template #body="{ data }">
-            <Avatar :image="data.foto_url" shape="circle" size="large" />
+            <Avatar v-if="data.foto_url" :image="data.foto_url" shape="circle" size="large" />
+            <Avatar v-else icon="pi pi-user" shape="circle" size="large" />
           </template>
         </Column>
         <Column header="Acciones" style="width: 120px">
@@ -76,7 +78,6 @@ import { useToast } from 'primevue/usetoast';
 const toast = useToast();
 const alumnos = ref([]);
 const aulas = ref([]);
-const filtro = ref('');
 const dialogoEditarVisible = ref(false);
 const dialogoEliminarVisible = ref(false);
 const guardando = ref(false);
@@ -94,6 +95,10 @@ const carreras = [
     'Medicina Humana', 'Medicina Veterinaria', 'Ingeniería Química',
     'Ingeniería en Industrias Alimentarias', 'Zootecnia',
 ];
+
+const filters = ref({
+    global: { value: null, matchMode: 'contains' }
+});
 
 async function cargarAlumnos() {
     try {

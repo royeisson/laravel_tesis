@@ -2,7 +2,15 @@
   <Card>
     <template #title>Aula: {{ aulaNombre }}</template>
     <template #content>
+      <div v-if="cargandoTabla" class="flex justify-center py-8">
+        <ProgressSpinner />
+      </div>
+      <div v-else-if="alumnos.length === 0" class="text-center py-8 text-gray-500">
+        <i class="pi pi-users text-4xl text-gray-300 mb-3"></i>
+        <p>No hay alumnos en esta aula</p>
+      </div>
       <DataTable
+        v-else
         :value="alumnos"
         :paginator="true"
         :rows="15"
@@ -13,9 +21,15 @@
         <Column field="dni" header="DNI" style="width: 100px" />
         <Column field="nombre" header="Nombre" />
         <Column field="carrera" header="Carrera" />
+        <Column header="Estado" style="width: 100px">
+          <template #body="{ data }">
+            <Tag :value="data.estado || 'Faltó'" :severity="(data.estado || 'Faltó') === 'Asistió' ? 'success' : 'danger'" />
+          </template>
+        </Column>
         <Column header="Foto" style="width: 70px">
           <template #body="{ data }">
-            <Avatar :image="data.foto_url" shape="circle" size="large" />
+            <Avatar v-if="data.foto_url" :image="data.foto_url" shape="circle" size="large" />
+            <Avatar v-else icon="pi pi-user" shape="circle" size="large" />
           </template>
         </Column>
         <Column header="Acciones" style="width: 100px">
@@ -66,17 +80,43 @@ const aulas = ref([]);
 const dialogVisible = ref(false);
 const editForm = ref({ id: null, nombre: '', carrera: '', aula_id: null });
 const cargando = ref(false);
+const cargandoTabla = ref(false);
 
 async function cargarDatos() {
     if (!aulaId.value) return;
+
+    // 1. Cache inmediato
+    const cacheKey = `vista_aula_${aulaId.value}`;
+    const cache = localStorage.getItem(cacheKey);
+    if (cache) {
+        const parsed = JSON.parse(cache);
+        alumnos.value = parsed.alumnos || [];
+        aulaNombre.value = parsed.aulaNombre || '';
+    }
+
+    cargandoTabla.value = true;
     try {
-        const todo = await API.obtenerAlumnos({ aula_id: aulaId.value, sin_paginacion: 'true' });
-        alumnos.value = todo;
-        const listaAulas = await API.obtenerAulas();
+        // 2. Ambas peticiones en paralelo
+        const [todo, listaAulas] = await Promise.all([
+            API.obtenerAlumnos({ aula_id: aulaId.value, sin_paginacion: 'true' }),
+            API.obtenerAulas(),
+        ]);
+
+        alumnos.value = Array.isArray(todo) ? todo : [];
         aulas.value = listaAulas;
         const aula = listaAulas.find((a) => a.id == aulaId.value);
         aulaNombre.value = aula ? aula.nombre : '—';
-    } catch { }
+
+        localStorage.setItem(cacheKey, JSON.stringify({
+            alumnos: alumnos.value,
+            aulaNombre: aulaNombre.value,
+        }));
+    } catch (e) {
+        toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudieron cargar los datos', life: 3000 });
+        if (!alumnos.value.length) alumnos.value = [];
+    } finally {
+        cargandoTabla.value = false;
+    }
 }
 
 watch(() => props.id, (val) => {

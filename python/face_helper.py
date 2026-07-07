@@ -106,6 +106,26 @@ def validar_rostro(img):
         return False, msg
     return True, 'Rostro listo para registrar'
 
+def obtener_todos_embeddings(img):
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    faces = app.get(rgb)
+    resultados = []
+    for face in faces:
+        # Usar la MISMA validacion estricta que el registro/verificacion individual
+        det_score = float(getattr(face, 'det_score', 0))
+        if det_score < 0.75:
+            continue
+        kps = getattr(face, 'kps', None)
+        if kps is None or len(kps) < 5:
+            continue
+        embedding = face.normed_embedding
+        if embedding is None or len(embedding) == 0:
+            continue
+        embedding = embedding.tolist()
+        bbox = face.bbox.astype(int).tolist()
+        resultados.append({'embedding': embedding, 'bbox': bbox})
+    return resultados
+
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         print(json.dumps({'success': False, 'error': 'Argumentos insuficientes'}))
@@ -138,6 +158,12 @@ if __name__ == '__main__':
                 print(json.dumps({'success': False, 'error': error}))
             else:
                 print(json.dumps({'success': True, 'embedding': embedding}))
+        elif accion == 'verificar_multi':
+            rostros = obtener_todos_embeddings(img)
+            if len(rostros) == 0:
+                print(json.dumps({'success': False, 'error': 'No se detecto ningun rostro valido'}))
+            else:
+                print(json.dumps({'success': True, 'rostros': rostros}))
         else:
             print(json.dumps({'success': False, 'error': f'Accion desconocida: {accion}'}))
     except Exception as e:

@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Alumno extends Model
 {
-    protected $fillable = ['dni', 'nombre', 'carrera', 'aula_id', 'foto_path', 'vector_rostro'];
+    protected $fillable = ['dni', 'nombre', 'carrera', 'aula_id', 'estado', 'foto_path', 'vector_rostro'];
 
     public function aula()
     {

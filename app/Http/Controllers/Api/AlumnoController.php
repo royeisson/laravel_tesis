@@ -10,7 +10,8 @@ class AlumnoController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Alumno::with('aula');
+        $query = Alumno::with('aula')
+            ->select(['id', 'dni', 'nombre', 'carrera', 'aula_id', 'estado', 'foto_path']);
 
         if ($request->aula_id) {
             $query->where('aula_id', $request->aula_id);
@@ -24,6 +25,7 @@ class AlumnoController extends Controller
                 'carrera'     => $a->carrera,
                 'aula_id'     => $a->aula_id,
                 'aula_nombre' => $a->aula?->nombre,
+                'estado'      => $a->estado,
                 'foto_url'    => $a->foto_path ? asset('storage/fotos/' . $a->foto_path) : null,
                 'foto_path'   => $a->foto_path,
             ];
@@ -46,6 +48,7 @@ class AlumnoController extends Controller
             'carrera'     => $a->carrera,
             'aula_id'     => $a->aula_id,
             'aula_nombre' => $a->aula?->nombre,
+            'estado'      => $a->estado,
             'foto_url'    => $a->foto_path ? asset('storage/fotos/' . $a->foto_path) : null,
             'foto_path'   => $a->foto_path,
         ]);

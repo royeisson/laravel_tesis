@@ -69,16 +69,17 @@ class VerificacionController extends Controller
 
     private function buscarAlumnoPorEmbedding(array $embedding)
     {
-        $alumnos = Alumno::whereNotNull('vector_rostro')->get();
+        $alumnos = Alumno::whereNotNull('vector_rostro')
+            ->select(['id', 'dni', 'nombre', 'carrera', 'aula_id', 'estado', 'foto_path', 'vector_rostro'])
+            ->get();
+
         $mejor = null;
         $mejorDist = 1.5;
 
         foreach ($alumnos as $alumno) {
-            if (!$alumno->vector_rostro) continue;
-            // pgvector puede devolver [1,2,3] o {1,2,3}; normalizamos a JSON válido
             $clean = str_replace(['{', '}'], ['[', ']'], $alumno->vector_rostro);
             $dbVector = json_decode($clean);
-            if (!$dbVector) continue;
+            if (!$dbVector || !is_array($dbVector)) continue;
 
             $dist = $this->cosineDistance($embedding, $dbVector);
             if ($dist < $mejorDist) {
@@ -105,7 +106,6 @@ class VerificacionController extends Controller
 
             $dniLog = $data['dni'];
 
-            // Validar que el DNI no exista
             $existente = Alumno::where('dni', $data['dni'])->first();
             if ($existente) {
                 $resultadoLog = 'Registro fallido: DNI ya registrado';
@@ -154,7 +154,6 @@ class VerificacionController extends Controller
 
             $embedding = $output['embedding'];
 
-            // Validar que no exista un rostro muy similar ya registrado (distancia < 0.35)
             $busqueda = $this->buscarAlumnoPorEmbedding($embedding);
             if ($busqueda['alumno'] && $busqueda['distancia'] < 0.35) {
                 if (file_exists($imagePath)) unlink($imagePath);
@@ -305,6 +304,112 @@ class VerificacionController extends Controller
         return response()->json([
             'rostro_detectado' => ($output['valido'] ?? false) && $result['success'],
             'mensaje'          => $mensaje,
+        ]);
+    }
+
+    public function verificarMasivo(Request $request)
+    {
+        $request->validate(['foto' => 'required|image']);
+        $foto = $request->file('foto');
+        $filename = 'temp_masivo_' . time() . '.jpg';
+
+        $tempDir = sys_get_temp_dir();
+        $imagePath = $tempDir . DIRECTORY_SEPARATOR . $filename;
+        $foto->move($tempDir, $filename);
+
+        // 1. Intentar servidor Python permanente (rapido)
+        $serverResult = $this->llamarServidorPython($imagePath);
+        if ($serverResult) {
+            if (file_exists($imagePath)) unlink($imagePath);
+            return $this->procesarResultadoMasivo($serverResult, $request);
+        }
+
+        // 2. Fallback: script Python tradicional (lento)
+        $result = $this->ejecutarPython(['verificar_multi', $imagePath]);
+        if (file_exists($imagePath)) unlink($imagePath);
+
+        if (!$result['success']) {
+            return response()->json(['conocido' => false, 'mensaje' => 'Error del motor'], 422);
+        }
+
+        $output = json_decode($result['output'], true);
+        if (!$output || !$output['success']) {
+            return response()->json(['conocido' => false, 'mensaje' => $output['error'] ?? 'No se detectó rostro'], 400);
+        }
+
+        return $this->procesarResultadoMasivo($output, $request);
+    }
+
+    private function llamarServidorPython(string $imagePath): ?array
+    {
+        $imageData = file_get_contents($imagePath);
+        if ($imageData === false) return null;
+
+        $ch = curl_init('http://127.0.0.1:5001/verificar');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $imageData);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/octet-stream']);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($response !== false && $httpCode === 200) {
+            $decoded = json_decode($response, true);
+            if ($decoded && isset($decoded['rostros'])) {
+                return $decoded;
+            }
+        }
+        return null;
+    }
+
+    private function procesarResultadoMasivo(array $output, Request $request)
+    {
+        $rostros = $output['rostros'] ?? [];
+        if (empty($rostros)) {
+            return response()->json(['conocido' => false, 'mensaje' => 'No se detectó rostro'], 400);
+        }
+
+        $usuario = $request->header('X-Coordinador-Usuario');
+        $misAulasIds = [];
+        if ($usuario) {
+            $coordinador = \App\Models\Coordinador::where('usuario', $usuario)->with('aulas')->first();
+            if ($coordinador) {
+                $misAulasIds = $coordinador->aulas->pluck('id')->toArray();
+            }
+        }
+
+        $resultados = [];
+        foreach ($rostros as $rostro) {
+            $bbox = $rostro['bbox'];
+            if ($rostro['conocido'] ?? false) {
+                $esMiAula = in_array($rostro['aula_id'], $misAulasIds);
+                $resultados[] = [
+                    'conocido'   => true,
+                    'dni'        => $rostro['dni'],
+                    'nombre'     => $rostro['nombre'],
+                    'carrera'    => $rostro['carrera'],
+                    'aula'       => $rostro['aula_id'] ? (\App\Models\Aula::find($rostro['aula_id'])?->nombre ?? '—') : '—',
+                    'aula_id'    => $rostro['aula_id'],
+                    'estado'     => $rostro['estado'],
+                    'es_mi_aula' => $esMiAula,
+                    'bbox'       => $bbox,
+                    'distancia'  => $rostro['distancia'],
+                    'confianza'  => $rostro['confianza'],
+                ];
+            } else {
+                $resultados[] = [
+                    'conocido' => false,
+                    'bbox'     => $bbox,
+                ];
+            }
+        }
+
+        return response()->json([
+            'rostros' => $resultados,
+            'mensaje' => count($resultados) . ' rostro(s) detectado(s)',
         ]);
     }
 }

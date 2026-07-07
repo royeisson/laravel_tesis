@@ -12,10 +12,9 @@ function cargarScript(src) {
 let faceMeshInstance = null;
 let FaceMeshClass = null;
 
-export async function initFaceMesh() {
-    if (faceMeshInstance) return faceMeshInstance;
+export async function initFaceMesh(maxFaces = 1) {
+    if (faceMeshInstance && faceMeshInstance._maxFaces === maxFaces) return faceMeshInstance;
 
-    // Cargar MediaPipe Face Mesh desde CDN
     if (!window.FaceMesh) {
         await cargarScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js');
     }
@@ -28,12 +27,13 @@ export async function initFaceMesh() {
     });
 
     faceMesh.setOptions({
-        maxNumFaces: 1,
+        maxNumFaces: maxFaces,
         refineLandmarks: true,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5,
     });
 
+    faceMesh._maxFaces = maxFaces;
     faceMeshInstance = faceMesh;
     return faceMesh;
 }

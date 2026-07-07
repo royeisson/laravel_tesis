@@ -16,7 +16,7 @@
         </div>
       </header>
       <main class="flex-1 overflow-auto p-4">
-        <router-view />
+        <router-view :key="auth.usuario?.rol || 'guest'" />
       </main>
     </div>
     <Toast position="bottom-right" />
@@ -35,7 +35,7 @@
         </div>
       </header>
       <main class="flex-1 overflow-auto p-4 bg-gray-50">
-        <router-view />
+        <router-view :key="auth.usuario?.rol || 'guest'" />
       </main>
     </div>
     <Toast position="bottom-right" />
@@ -52,6 +52,6 @@ const router = useRouter();
 
 function cerrarSesion() {
     logout();
-    router.push('/login');
+    window.location.href = '/login';
 }
 </script>
