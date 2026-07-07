@@ -296,15 +296,15 @@ async function tickVerificacion() {
                             }
                         }
                     } else {
-                        if (ahora >= (mejorTrack.identityExpiresAt || 0)) {
-                            mejorTrack.conocido = false;
-                            mejorTrack.label = '';
-                            mejorTrack.aula = '';
-                            mejorTrack.esMiAula = false;
-                            mejorTrack.dni = '';
-                            mejorTrack.estado = '';
-                            mejorTrack.confianza = 0;
-                        }
+                        // Backend dice DESCONOCIDO: resetear INMEDIATAMENTE
+                        mejorTrack.conocido = false;
+                        mejorTrack.label = '';
+                        mejorTrack.aula = '';
+                        mejorTrack.esMiAula = false;
+                        mejorTrack.dni = '';
+                        mejorTrack.estado = '';
+                        mejorTrack.confianza = 0;
+                        mejorTrack.identityExpiresAt = 0;
                     }
                 }
             });

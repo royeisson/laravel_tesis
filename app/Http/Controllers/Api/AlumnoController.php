@@ -82,6 +82,26 @@ class AlumnoController extends Controller
             if (file_exists($path)) unlink($path);
         }
         $alumno->delete();
+
+        // Notificar al servidor Python para recargar embeddings
+        $this->recargarServidorPython();
+
         return response()->json(['mensaje' => 'Alumno eliminado']);
+    }
+
+    private function recargarServidorPython()
+    {
+        try {
+            $ch = curl_init('http://127.0.0.1:5001/reload');
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, '');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 3);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+            curl_exec($ch);
+            curl_close($ch);
+        } catch (\Exception $e) {
+            // Silencioso
+        }
     }
 }

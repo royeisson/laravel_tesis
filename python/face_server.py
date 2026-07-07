@@ -114,7 +114,7 @@ def procesar_imagen(img_bytes):
             bbox = face.bbox.astype(int).tolist()
             mejor, dist = buscar_mejor_coincidencia(embedding)
 
-            if mejor and dist <= 0.75:
+            if mejor and dist <= 0.55:
                 resultados.append({
                     'conocido': True,
                     'dni': mejor['dni'],
