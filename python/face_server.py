@@ -139,6 +139,80 @@ def procesar_imagen(img_bytes):
         log(traceback.format_exc())
         return {'success': False, 'error': str(e)}
 
+def extraer_embedding(img_bytes):
+    """Extrae embedding de un rostro para registro (validacion estricta)."""
+    try:
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return None, 'No se pudo decodificar imagen'
+
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        faces = app.get(rgb)
+
+        if len(faces) == 0:
+            return None, 'No se detecto rostro'
+        if len(faces) > 1:
+            return None, 'Se detectaron multiples rostros. Solo uno permitido.'
+
+        face = faces[0]
+        det_score = float(getattr(face, 'det_score', 0))
+        if det_score < 0.75:
+            return None, 'Rostro incompleto o tapado. Asegurate de que tu rostro completo sea visible de frente.'
+
+        kps = getattr(face, 'kps', None)
+        if kps is None or len(kps) < 5:
+            return None, 'No se detectaron puntos faciales completos. Rostro tapado o incompleto.'
+
+        left_eye = np.array(kps[0])
+        right_eye = np.array(kps[1])
+        nose = np.array(kps[2])
+        mouth_left = np.array(kps[3])
+        mouth_right = np.array(kps[4])
+
+        eye_dist = np.linalg.norm(left_eye - right_eye)
+        bbox = face.bbox.astype(float)
+        face_width = bbox[2] - bbox[0]
+        face_height = bbox[3] - bbox[1]
+
+        if eye_dist < face_width * 0.28:
+            return None, 'Rostro de perfil o incompleto. Mira directamente a la camara.'
+
+        aspect_ratio = face_height / face_width if face_width > 0 else 0
+        if aspect_ratio < 0.8 or aspect_ratio > 1.8:
+            return None, 'Rostro inclinado o posicion anormal.'
+
+        eyes_center_x = (left_eye[0] + right_eye[0]) / 2
+        if abs(nose[0] - eyes_center_x) > face_width * 0.15:
+            return None, 'Rostro girado. Mira directamente a la camara.'
+
+        eyes_center_y = (left_eye[1] + right_eye[1]) / 2
+        if nose[1] <= eyes_center_y:
+            return None, 'Rostro incompleto. Posicion facial anormal.'
+
+        mouth_y = (mouth_left[1] + mouth_right[1]) / 2
+        if mouth_y <= nose[1]:
+            return None, 'Rostro incompleto. Boca no detectada.'
+
+        face_area = face_width * face_height
+        frame_area = img.shape[1] * img.shape[0]
+        if face_area / frame_area < 0.015:
+            return None, 'Acercate un poco mas a la camara.'
+
+        if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > img.shape[1] or bbox[3] > img.shape[0]:
+            return None, 'Rostro cortado. Acomodate mejor en el ovalo.'
+
+        centro_x = (bbox[0] + bbox[2]) / 2
+        if centro_x < img.shape[1] * 0.15 or centro_x > img.shape[1] * 0.85:
+            return None, 'Centra tu rostro en el ovalo.'
+
+        embedding = face.normed_embedding.tolist()
+        return {'embedding': embedding}, None
+    except Exception as e:
+        log(f"[FaceServer] ERROR extrayendo embedding: {e}")
+        log(traceback.format_exc())
+        return None, str(e)
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -173,6 +247,30 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(resultado).encode())
                 return
 
+            if self.path == '/registrar':
+                content_length = int(self.headers.get('Content-Length', 0))
+                if content_length == 0:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+
+                body = self.rfile.read(content_length)
+                resultado, error = extraer_embedding(body)
+
+                if error:
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'success': False, 'error': error}).encode())
+                else:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'success': True, 'embedding': resultado['embedding']}).encode())
+                return
+
             self.send_response(404)
             self.end_headers()
 
@@ -194,7 +292,7 @@ if __name__ == '__main__':
     port = 5001
     if len(sys.argv) > 1:
         port = int(sys.argv[1])
-    server = HTTPServer(('127.0.0.1', port), Handler)
-    log(f"[FaceServer] Escuchando en http://127.0.0.1:{port}")
+    server = HTTPServer(('0.0.0.0', port), Handler)
+    log(f"[FaceServer] Escuchando en http://0.0.0.0:{port}")
     server.serve_forever()
 

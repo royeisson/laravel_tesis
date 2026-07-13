@@ -146,26 +146,33 @@ class VerificacionController extends Controller
                 ], 500);
             }
 
-            $result = $this->ejecutarPython(['registrar', $imagePath]);
+            // 1. INTENTAR SERVIDOR RAPIDO (HTTP permanente en puerto 5001)
+            $serverResult = $this->llamarServidorRegistrar($imagePath);
+            if ($serverResult && isset($serverResult['success']) && $serverResult['success'] && isset($serverResult['embedding'])) {
+                $output = $serverResult;
+            } else {
+                // 2. FALLBACK: script Python tradicional (lento, carga modelos desde cero)
+                $result = $this->ejecutarPython(['registrar', $imagePath]);
 
-            if (!$result['success']) {
-                if (file_exists($imagePath)) unlink($imagePath);
-                $resultadoLog = 'Registro fallido: Error del motor - ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido');
-                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
-                return response()->json([
-                    'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
-                ], 422);
-            }
+                if (!$result['success']) {
+                    if (file_exists($imagePath)) unlink($imagePath);
+                    $resultadoLog = 'Registro fallido: Error del motor - ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido');
+                    RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
+                    return response()->json([
+                        'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
+                    ], 422);
+                }
 
-            $output = json_decode($result['output'], true);
+                $output = json_decode($result['output'], true);
 
-            if (!$output || !$output['success']) {
-                if (file_exists($imagePath)) unlink($imagePath);
-                $resultadoLog = 'Registro fallido: ' . ($output['error'] ?? 'No se detectó rostro en la imagen');
-                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
-                return response()->json([
-                    'detalle' => $output['error'] ?? 'No se detectó rostro en la imagen',
-                ], 400);
+                if (!$output || !$output['success']) {
+                    if (file_exists($imagePath)) unlink($imagePath);
+                    $resultadoLog = 'Registro fallido: ' . ($output['error'] ?? 'No se detectó rostro en la imagen');
+                    RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
+                    return response()->json([
+                        'detalle' => $output['error'] ?? 'No se detectó rostro en la imagen',
+                    ], 400);
+                }
             }
 
             $embedding = $output['embedding'];
@@ -225,6 +232,52 @@ class VerificacionController extends Controller
         $imagePath = $tempDir . DIRECTORY_SEPARATOR . $filename;
         $foto->move($tempDir, $filename);
 
+        // 1. INTENTAR SERVIDOR RAPIDO (HTTP permanente en puerto 5001)
+        $serverResult = $this->llamarServidorPython($imagePath);
+        if ($serverResult && isset($serverResult['rostros']) && count($serverResult['rostros']) > 0) {
+            $rostro = $serverResult['rostros'][0];
+            if (file_exists($imagePath)) unlink($imagePath);
+
+            if ($rostro['conocido']) {
+                $resultado = 'Verificación exitosa';
+                $exitoso = true;
+                $nombre = $rostro['nombre'];
+                $carrera = $rostro['carrera'];
+                $aulaNombre = $rostro['aula_id'] ? (\App\Models\Aula::find($rostro['aula_id'])?->nombre ?? '—') : '—';
+                $dni = $rostro['dni'];
+                $fotoUrl = $rostro['foto_path'] ? asset('storage/fotos/' . $rostro['foto_path']) : null;
+                $mejorDist = $rostro['distancia'];
+            } else {
+                $resultado = 'Verificación fallida: Coincidencia no encontrada';
+                $exitoso = false;
+                $nombre = '—';
+                $carrera = '—';
+                $aulaNombre = '—';
+                $dni = '—';
+                $fotoUrl = null;
+                $mejorDist = 1.0;
+            }
+
+            RegistroAcceso::create([
+                'dni'       => $dni,
+                'resultado' => $resultado,
+                'distancia' => $mejorDist,
+            ]);
+
+            return response()->json([
+                'exitoso'    => $exitoso,
+                'mensaje'    => $resultado,
+                'nombre'     => $nombre,
+                'carrera'    => $carrera,
+                'aula'       => $aulaNombre,
+                'dni'        => $dni,
+                'foto_url'   => $fotoUrl,
+                'distancia'  => $mejorDist,
+                'timestamp'  => now()->toDateTimeString(),
+            ]);
+        }
+
+        // 2. FALLBACK: script Python tradicional (lento, carga modelos desde cero)
         $result = $this->ejecutarPython(['verificar', $imagePath]);
 
         if (file_exists($imagePath)) unlink($imagePath);
@@ -378,6 +431,31 @@ class VerificacionController extends Controller
         if ($response !== false && $httpCode === 200) {
             $decoded = json_decode($response, true);
             if ($decoded && isset($decoded['rostros'])) {
+                return $decoded;
+            }
+        }
+        return null;
+    }
+
+    private function llamarServidorRegistrar(string $imagePath): ?array
+    {
+        $imageData = file_get_contents($imagePath);
+        if ($imageData === false) return null;
+
+        $ch = curl_init('http://127.0.0.1:5001/registrar');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $imageData);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/octet-stream']);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($response !== false && $httpCode === 200) {
+            $decoded = json_decode($response, true);
+            if ($decoded && isset($decoded['success'])) {
                 return $decoded;
             }
         }

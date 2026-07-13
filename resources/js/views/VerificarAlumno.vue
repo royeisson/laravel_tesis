@@ -4,6 +4,8 @@
     <div class="flex flex-col items-center gap-3">
       <CameraView ref="cameraRef" :width="360" :height="270" />
       <Button label="Encender / Apagar" icon="pi pi-camera" @click="toggleCam" severity="secondary" />
+      <Tag v-if="wsConectado" value="Modo Rápido (WebSocket)" severity="success" class="text-xs" />
+      <Tag v-else value="Conectando a servidor facial..." severity="warn" class="text-xs" />
     </div>
 
     <!-- Panel Resultado -->
@@ -17,7 +19,8 @@
       <template #content>
         <!-- Resultado exitoso -->
         <div v-if="resultado && resultado.exitoso" class="flex flex-col items-center gap-5 py-2">
-          <Avatar :image="resultado.foto_url" size="xlarge" shape="circle" class="w-28 h-28 shadow-lg" />
+          <Avatar v-if="resultado.foto_url" :image="resultado.foto_url" size="xlarge" shape="circle" class="w-28 h-28 shadow-lg" />
+          <Avatar v-else icon="pi pi-user" size="xlarge" shape="circle" class="w-28 h-28 shadow-lg" />
           <div class="text-center space-y-1">
             <h3 class="text-3xl font-bold text-gray-800">{{ resultado.nombre }}</h3>
             <p class="text-lg text-gray-500">{{ resultado.carrera }}</p>
@@ -71,6 +74,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import API from '../services/api';
+import faceSocket from '../services/faceSocket.js';
 import CameraView from '../components/CameraView.vue';
 import { useToast } from 'primevue/usetoast';
 
@@ -78,11 +82,36 @@ const toast = useToast();
 const cameraRef = ref(null);
 const resultado = ref(null);
 const cargando = ref(false);
+const wsConectado = ref(false);
+const aulasMap = ref({});
 
 let intervaloVerificacion = null;
 let timeoutLimpiar = null;
 
-onMounted(() => {
+onMounted(async () => {
+    // Cargar mapa de aulas para mostrar nombre
+    try {
+        const aulas = await API.obtenerAulas();
+        aulasMap.value = Object.fromEntries(aulas.map((a) => [a.id, a.nombre]));
+    } catch { }
+
+    // Conectar WebSocket (sin desconectar en unmount: singleton persistente)
+    faceSocket.onConnect = () => {
+        wsConectado.value = true;
+        toast.add({ severity: 'success', summary: 'Servidor Facial', detail: 'Conectado (modo rápido)', life: 3000 });
+    };
+    faceSocket.onDisconnect = () => {
+        wsConectado.value = false;
+        toast.add({ severity: 'warn', summary: 'Servidor Facial', detail: 'Desconectado. Intentando reconectar...', life: 3000 });
+    };
+    faceSocket.onMessage = manejarResultadoWebSocket;
+    faceSocket.connect();
+
+    // Si ya estaba conectado (viniendo de otra vista), activar inmediatamente
+    if (faceSocket.connected) {
+        wsConectado.value = true;
+    }
+
     setTimeout(() => {
         cameraRef.value?.toggleCam();
         iniciarVerificacionAutomatica();
@@ -91,6 +120,7 @@ onMounted(() => {
 
 onUnmounted(() => {
     detenerVerificacionAutomatica();
+    // NO llamamos faceSocket.disconnect() para mantener la conexión viva al navegar
 });
 
 function toggleCam() {
@@ -107,8 +137,8 @@ function iniciarVerificacionAutomatica() {
     detenerVerificacionAutomatica();
     intervaloVerificacion = setInterval(async () => {
         if (!cameraRef.value?.tieneStream() || cargando.value) return;
-        await verificar();
-    }, 2200);
+        await verificarPorWebSocket();
+    }, 1800);
 }
 
 function detenerVerificacionAutomatica() {
@@ -129,26 +159,48 @@ function programarLimpieza() {
     }, 6000);
 }
 
-async function verificar() {
+async function verificarPorWebSocket() {
     if (!cameraRef.value?.tieneStream()) return;
 
-    cargando.value = true;
-    try {
-        const blob = await cameraRef.value.capturarFotoNativa();
-        const fd = new FormData();
-        fd.append('foto', blob, 'captura.jpg');
-        const res = await API.verificarRostro(fd);
-        const data = await res.json();
-        if (res.ok) {
-            resultado.value = data;
-            programarLimpieza();
-        } else {
-            toast.add({ severity: 'warn', summary: 'Verificación', detail: data.detalle || 'No se pudo verificar', life: 2500 });
-        }
-    } catch (e) {
-        toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'Error de red', life: 2500 });
-    } finally {
-        cargando.value = false;
+    const blob = await cameraRef.value.capturarFotoNativa();
+    const enviado = faceSocket.sendFrame(blob);
+    if (enviado) {
+        cargando.value = true;
     }
+}
+
+function manejarResultadoWebSocket(res) {
+    cargando.value = false;
+
+    if (!res.rostros || res.rostros.length === 0) {
+        resultado.value = {
+            exitoso: false,
+            timestamp: new Date().toLocaleString(),
+        };
+        programarLimpieza();
+        return;
+    }
+
+    const r = res.rostros[0];
+
+    if (r.conocido) {
+        resultado.value = {
+            exitoso: true,
+            nombre: r.nombre,
+            carrera: r.carrera,
+            aula: aulasMap.value[r.aula_id] || `Aula ${r.aula_id}`,
+            dni: r.dni,
+            foto_url: r.foto_path ? `/storage/fotos/${r.foto_path}` : null,
+            distancia: r.distancia,
+            timestamp: new Date().toLocaleString(),
+        };
+    } else {
+        resultado.value = {
+            exitoso: false,
+            timestamp: new Date().toLocaleString(),
+        };
+    }
+
+    programarLimpieza();
 }
 </script>

@@ -88,13 +88,13 @@ function actualizarEstado(valido, msg) {
     if (valido) {
         consecutivosValidos++;
         consecutivosInvalidos = 0;
-        if (consecutivosValidos >= 3) {
+        if (consecutivosValidos >= 2) {
             btnRegistrarDisabled.value = false;
         }
     } else {
         consecutivosInvalidos++;
         consecutivosValidos = 0;
-        if (consecutivosInvalidos >= 2) {
+        if (consecutivosInvalidos >= 4) {
             btnRegistrarDisabled.value = true;
         }
     }

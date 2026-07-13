@@ -16,11 +16,17 @@
           <div class="relative w-full bg-black rounded-xl overflow-hidden border border-gray-300 shadow-lg" style="height: 480px">
             <video ref="videoRef" autoplay playsinline muted class="w-full h-full object-cover" style="transform: scaleX(-1)"></video>
             <canvas ref="overlayRef" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
+
             <div v-if="!camaraActiva" class="absolute inset-0 flex items-center justify-center bg-black/80 text-white z-10">
               <div class="text-center">
                 <i class="pi pi-camera text-5xl mb-3 animate-pulse"></i>
                 <p class="text-lg">Iniciando cámara...</p>
               </div>
+            </div>
+
+            <div v-if="!wsConectado && camaraActiva" class="absolute top-3 left-1/2 -translate-x-1/2 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-semibold z-10 flex items-center gap-2">
+              <i class="pi pi-times-circle"></i>
+              <span>Servidor facial desconectado</span>
             </div>
           </div>
         </template>
@@ -60,6 +66,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { initFaceMesh } from '../utils/faceValidator.js';
+import faceSocket from '../services/faceSocket.js';
 import API from '../services/api.js';
 import { auth } from '../stores/auth.js';
 import { useToast } from 'primevue/usetoast';
@@ -68,6 +75,7 @@ const toast = useToast();
 const videoRef = ref(null);
 const overlayRef = ref(null);
 const camaraActiva = ref(false);
+const wsConectado = ref(false);
 const aulas = ref([]);
 const aulaSeleccionada = ref(null);
 const alumnos = ref([]);
@@ -75,7 +83,6 @@ const cargandoAlumnos = ref(false);
 
 let stream = null;
 let rafId = null;
-let verifInterval = null;
 let faceMesh = null;
 
 const tracks = ref([]);
@@ -192,6 +199,11 @@ function onFaceMeshResults(results) {
     });
 
     tracks.value.forEach((t) => dibujarTrack(ctx, t, cw, ch, ahora));
+
+    // Enviar frame por WebSocket si hay rostros y la conexion esta lista
+    if (wsConectado.value && results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        enviarFramePorWebSocket();
+    }
 }
 
 function dibujarTrack(ctx, track, cw, ch, ahora) {
@@ -234,9 +246,11 @@ function dibujarTrack(ctx, track, cw, ch, ahora) {
     ctx.fillText(texto, cx, boxY + boxH / 2 + 1);
 }
 
-async function tickVerificacion() {
-    if (!videoRef.value || !camaraActiva.value || tickVerificacion._busy) return;
-    tickVerificacion._busy = true;
+let lastFrameTime = 0;
+async function enviarFramePorWebSocket() {
+    const ahora = Date.now();
+    if (ahora - lastFrameTime < 200) return; // max 5 FPS al servidor (reduce carga y desconexiones)
+    lastFrameTime = ahora;
 
     const v = videoRef.value;
     const w = v.videoWidth || 640;
@@ -249,73 +263,123 @@ async function tickVerificacion() {
     ctx.drawImage(v, 0, 0, w, h);
 
     const blob = await new Promise((res) => canvasTmp.toBlob(res, 'image/jpeg', 0.6));
-    const fd = new FormData();
-    fd.append('foto', blob, 'masivo.jpg');
+    faceSocket.sendFrame(blob);
+}
 
-    try {
-        const res = await API.verificarMasivo(fd, auth.usuario?.usuario);
-        const ahora = Date.now();
+function calcularIoU(a, b) {
+    // a, b: [x1, y1, x2, y2]
+    const xi1 = Math.max(a[0], b[0]);
+    const yi1 = Math.max(a[1], b[1]);
+    const xi2 = Math.min(a[2], b[2]);
+    const yi2 = Math.min(a[3], b[3]);
+    const interArea = Math.max(0, xi2 - xi1) * Math.max(0, yi2 - yi1);
+    const boxAArea = (a[2] - a[0]) * (a[3] - a[1]);
+    const boxBArea = (b[2] - b[0]) * (b[3] - b[1]);
+    const unionArea = boxAArea + boxBArea - interArea;
+    return unionArea > 0 ? interArea / unionArea : 0;
+}
 
-        if (res.rostros && Array.isArray(res.rostros)) {
-            res.rostros.forEach((r) => {
-                const bbox = r.bbox || [0, 0, 100, 100];
-                const rcx = (bbox[0] + bbox[2]) / 2;
-                const rcy = (bbox[1] + bbox[3]) / 2;
+function manejarResultadoWebSocket(res) {
+    const ahora = Date.now();
+    const misAulasIds = aulas.value.map((a) => a.id);
 
-                let mejorTrack = null;
-                let mejorDist = Infinity;
-                tracks.value.forEach((t) => {
-                    const dx = t.rawCx - rcx;
-                    const dy = t.rawCy - rcy;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    if (dist < mejorDist) {
-                        mejorDist = dist;
-                        mejorTrack = t;
-                    }
-                });
+    if (!res.rostros || !Array.isArray(res.rostros)) return;
 
-                if (mejorTrack && mejorDist < 150) {
-                    if (r.conocido) {
-                        mejorTrack.conocido = true;
-                        mejorTrack.label = r.nombre || '';
-                        mejorTrack.aula = r.aula || '';
-                        mejorTrack.esMiAula = r.es_mi_aula ?? false;
-                        mejorTrack.dni = r.dni || '';
-                        mejorTrack.estado = r.estado || '';
-                        mejorTrack.confianza = r.confianza || 0;
-                        mejorTrack.lastUpdate = ahora;
-                        mejorTrack.identityExpiresAt = ahora + 3000;
+    // Solo considerar tracks activos (vistos en los ultimos 800ms)
+    const tracksActivos = tracks.value.filter((t) => ahora - (t.lastSeen || 0) < 800);
 
-                        if (r.es_mi_aula && r.estado !== 'Asistió' && !yaMarcadosEnSesion.has(r.dni)) {
-                            const last = cooldownPorDni.get(r.dni);
-                            if (!last || ahora - last > COOLDOWN_MS) {
-                                cooldownPorDni.set(r.dni, ahora);
-                                yaMarcadosEnSesion.add(r.dni);
-                                API.marcarAsistencia(r.dni).then(() => {
-                                    toast.add({ severity: 'success', summary: 'Asistencia', detail: `${r.nombre} marcado como Asistió`, life: 2500 });
-                                    cargarAlumnos();
-                                }).catch(() => {});
-                            }
-                        }
-                    } else {
-                        // Backend dice DESCONOCIDO: resetear INMEDIATAMENTE
-                        mejorTrack.conocido = false;
-                        mejorTrack.label = '';
-                        mejorTrack.aula = '';
-                        mejorTrack.esMiAula = false;
-                        mejorTrack.dni = '';
-                        mejorTrack.estado = '';
-                        mejorTrack.confianza = 0;
-                        mejorTrack.identityExpiresAt = 0;
-                    }
+    // ================================================================
+    // ASIGNACION OPTIMA GLOBAL (Hungarian-like greedy)
+    // Construimos una matriz de costos entre TODOS los resultados
+    // del servidor y TODOS los tracks de MediaPipe, luego asignamos
+    // iterativamente el par con menor costo. Esto evita que un
+    // resultado "robe" el track de otro rostro.
+    // ================================================================
+    const costos = [];
+    res.rostros.forEach((r, ri) => {
+        const serverBbox = r.bbox || [0, 0, 100, 100];
+        tracksActivos.forEach((t, ti) => {
+            const trackBbox = [t.rawX1, t.rawY1, t.rawX2, t.rawY2];
+            const iou = calcularIoU(serverBbox, trackBbox);
+            if (iou < 0.10) return; // Descartar temprano si casi no se solapan
+
+            let costo = 1 - iou; // base: menor IoU = mayor costo
+
+            // Penalizar fuertemente si el track ya tiene otra identidad
+            // confirmada (evita que un rostro "robe" el nombre de otro)
+            const graciaActiva = t.conocido && ahora < (t.identityExpiresAt || 0);
+            if (graciaActiva && t.dni && r.dni && t.dni !== r.dni) {
+                costo += 2.0; // Penalizacion muy alta
+            }
+            // Penalizar moderadamente si el track ya tiene otra identidad
+            // aunque haya expirado la gracia (preferir mantener identidad)
+            else if (t.conocido && t.dni && r.dni && t.dni !== r.dni) {
+                costo += 0.5;
+            }
+
+            costos.push({ ri, ti, costo, iou, r, t });
+        });
+    });
+
+    // Ordenar por costo ascendente (mejor asignacion primero)
+    costos.sort((a, b) => a.costo - b.costo);
+
+    const resultadosUsados = new Set();
+    const tracksUsados = new Set();
+
+    costos.forEach(({ ri, ti, iou, r, t }) => {
+        if (resultadosUsados.has(ri) || tracksUsados.has(t.id)) return;
+        if (iou < 0.15) return; // Umbral minimo de solapamiento
+
+        resultadosUsados.add(ri);
+        tracksUsados.add(t.id);
+
+        if (r.conocido) {
+            const esMiAula = misAulasIds.includes(r.aula_id);
+            const aulaNombre = aulas.value.find((a) => a.id === r.aula_id)?.nombre || '';
+
+            t.conocido = true;
+            t.label = r.nombre || '';
+            t.aula = aulaNombre;
+            t.esMiAula = esMiAula;
+            t.dni = r.dni || '';
+            t.estado = r.estado || '';
+            t.confianza = r.confianza || 0;
+            t.lastUpdate = ahora;
+            t.identityExpiresAt = ahora + 15000; // 15 segundos de gracia
+
+            const alumnoEnLista = alumnos.value.find((a) => a.dni === r.dni);
+            if (esMiAula && alumnoEnLista && alumnoEnLista.estado !== 'Asistió' && !yaMarcadosEnSesion.has(r.dni)) {
+                const last = cooldownPorDni.get(r.dni);
+                if (!last || ahora - last > COOLDOWN_MS) {
+                    cooldownPorDni.set(r.dni, ahora);
+                    yaMarcadosEnSesion.add(r.dni);
+                    API.marcarAsistencia(r.dni).then(() => {
+                        const alumno = alumnos.value.find((a) => a.dni === r.dni);
+                        if (alumno) alumno.estado = 'Asistió';
+                        toast.add({ severity: 'success', summary: 'Asistencia', detail: `${r.nombre} marcado como Asistió`, life: 2500 });
+                        cargarAlumnos();
+                    }).catch(() => {});
                 }
-            });
+            }
+        } else {
+            // Resultado DESCONOCIDO del servidor
+            // NUNCA resetear un track que esta identificado y en periodo de gracia
+            const graciaActiva = t.conocido && ahora < (t.identityExpiresAt || 0);
+            if (graciaActiva) {
+                return; // Ignorar completamente
+            }
+
+            t.conocido = false;
+            t.label = '';
+            t.aula = '';
+            t.esMiAula = false;
+            t.dni = '';
+            t.estado = '';
+            t.confianza = 0;
+            t.identityExpiresAt = 0;
         }
-    } catch (e) {
-        console.error('Verificacion error:', e);
-    } finally {
-        tickVerificacion._busy = false;
-    }
+    });
 }
 
 async function cargarAulas() {
@@ -349,6 +413,9 @@ async function resetAsistencias() {
         await API.resetAsistencia(aulaSeleccionada.value);
         toast.add({ severity: 'success', summary: 'Reseteado', detail: 'Asistencias reiniciadas', life: 3000 });
         await cargarAlumnos();
+        // LIMPIAR: permitir que los alumnos vuelvan a marcar asistencia
+        yaMarcadosEnSesion.clear();
+        cooldownPorDni.clear();
     } catch (e) {
         toast.add({ severity: 'error', summary: 'Error', detail: e.message || 'No se pudo resetear', life: 3000 });
     }
@@ -358,12 +425,28 @@ onMounted(async () => {
     await cargarAulas();
     await iniciarCamara();
     await iniciarFaceMesh();
-    verifInterval = setInterval(tickVerificacion, 300);
+
+    // Conectar WebSocket (sin desconectar en unmount: singleton persistente)
+    faceSocket.onConnect = () => {
+        wsConectado.value = true;
+        toast.add({ severity: 'success', summary: 'Servidor Facial', detail: 'Conectado (modo rápido)', life: 3000 });
+    };
+    faceSocket.onDisconnect = () => {
+        wsConectado.value = false;
+        toast.add({ severity: 'warn', summary: 'Servidor Facial', detail: 'Desconectado. Intentando reconectar...', life: 3000 });
+    };
+    faceSocket.onMessage = manejarResultadoWebSocket;
+    faceSocket.connect();
+
+    // Si ya estaba conectado (viniendo de otra vista), activar inmediatamente
+    if (faceSocket.connected) {
+        wsConectado.value = true;
+    }
 });
 
 onUnmounted(() => {
     if (rafId) cancelAnimationFrame(rafId);
-    if (verifInterval) clearInterval(verifInterval);
     if (stream) stream.getTracks().forEach((t) => t.stop());
+    // NO llamamos faceSocket.disconnect() para mantener la conexión viva al navegar
 });
 </script>
