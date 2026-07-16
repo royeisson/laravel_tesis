@@ -116,7 +116,7 @@ class VerificacionController extends Controller
                 'dni'     => 'required|string',
                 'nombre'  => 'required|string',
                 'carrera' => 'required|string',
-                'aula_id' => 'required|integer',
+                'aula_id' => 'nullable|integer',
                 'foto'    => 'required|image',
             ]);
 
@@ -199,7 +199,7 @@ class VerificacionController extends Controller
                 'dni'           => $data['dni'],
                 'nombre'        => $data['nombre'],
                 'carrera'       => $data['carrera'],
-                'aula_id'       => $data['aula_id'],
+                'aula_id'       => $data['aula_id'] ?? null,
                 'foto_path'     => $filename,
                 'vector_rostro' => \DB::raw("'$vectorStr'::vector"),
             ]);

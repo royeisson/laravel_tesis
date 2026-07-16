@@ -1,28 +1,28 @@
 <template>
   <div class="flex flex-col gap-4">
     <!-- Stats cards -->
-    <div class="flex gap-4 flex-wrap">
-      <Card class="flex-1 min-w-[180px]">
+    <div class="grid grid-cols-3 gap-2 sm:gap-4">
+      <Card class="min-w-0">
         <template #content>
           <div class="text-center">
-            <div class="text-2xl font-bold text-indigo-600">{{ stats.total }}</div>
-            <div class="text-sm text-gray-500">Total Registros</div>
+            <div class="text-lg sm:text-2xl font-bold text-indigo-600">{{ stats.total }}</div>
+            <div class="text-xs sm:text-sm text-gray-500">Total</div>
           </div>
         </template>
       </Card>
-      <Card class="flex-1 min-w-[180px]">
+      <Card class="min-w-0">
         <template #content>
           <div class="text-center">
-            <div class="text-2xl font-bold text-green-600">{{ stats.exitosos }}</div>
-            <div class="text-sm text-gray-500">Exitosos</div>
+            <div class="text-lg sm:text-2xl font-bold text-green-600">{{ stats.exitosos }}</div>
+            <div class="text-xs sm:text-sm text-gray-500">Exitosos</div>
           </div>
         </template>
       </Card>
-      <Card class="flex-1 min-w-[180px]">
+      <Card class="min-w-0">
         <template #content>
           <div class="text-center">
-            <div class="text-2xl font-bold text-red-600">{{ stats.fallidos }}</div>
-            <div class="text-sm text-gray-500">Fallidos</div>
+            <div class="text-lg sm:text-2xl font-bold text-red-600">{{ stats.fallidos }}</div>
+            <div class="text-xs sm:text-sm text-gray-500">Fallidos</div>
           </div>
         </template>
       </Card>
@@ -46,7 +46,7 @@
 
     <!-- Logs table -->
     <div class="flex flex-col gap-2">
-      <div class="flex gap-2">
+      <div class="flex flex-col sm:flex-row gap-2">
         <InputText v-model="filtroDni" placeholder="Filtrar por DNI" class="flex-1" />
         <Button label="Exportar CSV" icon="pi pi-download" severity="secondary" @click="exportar" />
       </div>

@@ -38,7 +38,7 @@
     </Card>
 
     <!-- Dialog Crear/Editar -->
-    <Dialog v-model:visible="dialogoVisible" :header="esEditar ? 'Editar Aula' : 'Nueva Aula'" :modal="true" :style="{ width: '350px' }">
+    <Dialog v-model:visible="dialogoVisible" :header="esEditar ? 'Editar Aula' : 'Nueva Aula'" :modal="true" :style="{ width: '90vw', maxWidth: '350px' }">
       <div class="flex flex-col gap-3">
         <div class="flex flex-col gap-1">
           <label>Nombre del Aula</label>
@@ -52,7 +52,7 @@
     </Dialog>
 
     <!-- Dialog Eliminar -->
-    <Dialog v-model:visible="dialogoEliminarVisible" header="Confirmar" :modal="true" :style="{ width: '400px' }">
+    <Dialog v-model:visible="dialogoEliminarVisible" header="Confirmar" :modal="true" :style="{ width: '90vw', maxWidth: '400px' }">
       <div class="flex flex-col gap-2">
         <p>¿De verdad quieres eliminar el aula <strong>{{ aulaEliminar?.nombre }}</strong>?</p>
         <p v-if="aulaEliminar?.total_alumnos > 0" class="text-sm text-amber-600">

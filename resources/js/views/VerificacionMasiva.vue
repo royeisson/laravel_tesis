@@ -3,17 +3,17 @@
     <div class="flex-1 flex flex-col gap-3">
       <Card>
         <template #title>
-          <div class="flex items-center justify-between">
-            <span class="font-bold text-lg">Verificación Masiva</span>
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <span class="font-bold text-base sm:text-lg">Verificación Masiva</span>
             <div class="flex items-center gap-2">
-              <Select v-if="aulas.length > 1" v-model="aulaSeleccionada" :options="aulas" optionLabel="nombre" optionValue="id" placeholder="Selecciona aula" class="w-52" @change="cargarAlumnos" />
+              <Select v-if="aulas.length > 1" v-model="aulaSeleccionada" :options="aulas" optionLabel="nombre" optionValue="id" placeholder="Selecciona aula" class="w-32 sm:w-52" @change="cargarAlumnos" />
               <Tag v-else-if="aulas.length === 1" :value="aulas[0].nombre" severity="info" class="text-sm" />
               <Button icon="pi pi-refresh" text rounded @click="resetAsistencias" v-tooltip.top="'Resetear asistencias'" />
             </div>
           </div>
         </template>
         <template #content>
-          <div class="relative w-full bg-black rounded-xl overflow-hidden border border-gray-300 shadow-lg" style="height: 480px">
+          <div class="relative w-full bg-black rounded-xl overflow-hidden border border-gray-300 shadow-lg" style="height: 300px sm:height: 400px lg:height: 480px">
             <video ref="videoRef" autoplay playsinline muted class="w-full h-full object-cover" style="transform: scaleX(-1)"></video>
             <canvas ref="overlayRef" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
 
@@ -46,7 +46,7 @@
             <ProgressSpinner style="width: 30px; height: 30px" />
           </div>
           <div v-else-if="alumnos.length === 0" class="text-center text-gray-500 py-4">No hay alumnos en esta aula</div>
-          <div v-else class="flex flex-col gap-2 max-h-[480px] overflow-y-auto">
+          <div v-else class="flex flex-col gap-2 max-h-[300px] sm:max-h-[400px] lg:max-h-[480px] overflow-y-auto">
             <div v-for="alumno in alumnos" :key="alumno.dni" class="flex items-center gap-2 p-2 rounded border" :class="alumno.estado === 'Asistió' ? 'border-green-400 bg-green-50' : 'border-gray-200'">
               <Avatar v-if="alumno.foto_path" :image="`/storage/fotos/${alumno.foto_path}`" shape="circle" size="normal" />
               <Avatar v-else icon="pi pi-user" shape="circle" size="normal" />

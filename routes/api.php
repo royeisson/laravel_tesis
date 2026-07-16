@@ -7,6 +7,8 @@ use App\Http\Controllers\Api\VerificacionController;
 use App\Http\Controllers\Api\ReporteController;
 use App\Http\Controllers\Api\CoordinadorController;
 use App\Http\Controllers\Api\AsistenciaController;
+use App\Http\Controllers\Api\GuiaController;
+use App\Http\Controllers\Api\ExcelController;
 
 Route::get('/aulas', [AulaController::class, 'index']);
 Route::post('/aulas', [AulaController::class, 'store']);
@@ -38,3 +40,12 @@ Route::post('/coordinadores/login', [CoordinadorController::class, 'login']);
 Route::get('/asistencia/aula/{aulaId}', [AsistenciaController::class, 'listarPorAula']);
 Route::post('/asistencia/marcar', [AsistenciaController::class, 'marcar']);
 Route::post('/asistencia/reset', [AsistenciaController::class, 'reset']);
+
+Route::get('/guias', [GuiaController::class, 'index']);
+Route::post('/guias', [GuiaController::class, 'store']);
+Route::put('/guias/{id}', [GuiaController::class, 'update']);
+Route::delete('/guias/{id}', [GuiaController::class, 'destroy']);
+Route::post('/guias/login', [GuiaController::class, 'login']);
+
+Route::get('/excel/exportar', [ExcelController::class, 'exportar']);
+Route::post('/excel/importar', [ExcelController::class, 'importar']);

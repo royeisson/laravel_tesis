@@ -60,7 +60,7 @@ class AlumnoController extends Controller
         $data = $request->validate([
             'nombre'  => 'sometimes|string',
             'carrera' => 'sometimes|string',
-            'aula_id' => 'sometimes|integer',
+            'aula_id' => 'sometimes|nullable|integer',
         ]);
         $alumno->update($data);
         return response()->json(['mensaje' => 'Alumno actualizado']);
@@ -68,9 +68,9 @@ class AlumnoController extends Controller
 
     public function mover(Request $request, $id)
     {
-        $data = $request->validate(['aula_id' => 'required|integer']);
+        $data = $request->validate(['aula_id' => 'nullable|integer']);
         $alumno = Alumno::findOrFail($id);
-        $alumno->update(['aula_id' => $data['aula_id']]);
+        $alumno->update(['aula_id' => $data['aula_id'] ?? null]);
         return response()->json(['mensaje' => 'Alumno movido']);
     }
 

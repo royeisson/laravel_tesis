@@ -54,7 +54,7 @@
     </template>
   </Card>
 
-  <Dialog v-model:visible="dialogVisible" header="Editar Alumno" modal style="width: 400px">
+  <Dialog v-model:visible="dialogVisible" header="Editar Alumno" modal :style="{ width: '90vw', maxWidth: '400px' }">
     <div class="flex flex-col gap-3">
       <div class="flex flex-col gap-1">
         <label>Nombre</label>

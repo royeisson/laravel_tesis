@@ -1,8 +1,10 @@
 <template>
-  <div class="flex flex-col lg:flex-row gap-6 max-w-6xl mx-auto">
+  <div class="flex flex-col lg:flex-row gap-4 sm:gap-6 max-w-6xl mx-auto">
     <!-- Panel Cámara -->
-    <div class="flex flex-col items-center gap-3">
-      <CameraView ref="cameraRef" :width="360" :height="270" />
+    <div class="flex flex-col items-center gap-3 w-full lg:w-auto">
+      <div class="w-full max-w-[360px] mx-auto">
+        <CameraView ref="cameraRef" :width="360" :height="270" />
+      </div>
       <Button label="Encender / Apagar" icon="pi pi-camera" @click="toggleCam" severity="secondary" />
       <Tag v-if="wsConectado" value="Modo Rápido (WebSocket)" severity="success" class="text-xs" />
       <Tag v-else value="Conectando a servidor facial..." severity="warn" class="text-xs" />

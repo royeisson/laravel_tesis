@@ -1,5 +1,5 @@
 <template>
-  <div class="camera-wrapper" :style="{ width: width + 'px', height: height + 'px' }">
+  <div class="camera-wrapper" :style="{ maxWidth: width + 'px', height: height + 'px' }">
     <video
       ref="videoEl"
       autoplay

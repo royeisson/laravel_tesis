@@ -86,4 +86,16 @@ export default {
             headers: { 'X-Coordinador-Usuario': usuario },
         }).then((r) => r.json());
     },
+
+    // Guias
+    obtenerGuias: () => request('GET', '/guias'),
+    crearGuia: (data) => request('POST', '/guias', data),
+    editarGuia: (id, data) => request('PUT', `/guias/${id}`, data),
+    eliminarGuia: (id) => request('DELETE', `/guias/${id}`),
+
+    // Excel
+    exportarExcel: () =>
+        fetch(`${BASE}/excel/exportar`).then((r) => r.blob()),
+    importarExcel: (formData) =>
+        fetch(`${BASE}/excel/importar`, { method: 'POST', body: formData }),
 };

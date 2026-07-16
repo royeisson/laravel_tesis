@@ -1,15 +1,17 @@
 <template>
   <div class="flex flex-col lg:flex-row gap-4 max-w-5xl">
-    <Card class="flex-1">
+    <Card class="flex-1 w-full">
       <template #title>Captura Biométrica</template>
       <template #content>
         <div class="flex flex-col items-center gap-3">
-          <CameraView
-            ref="cameraRef"
-            :auto-start="false"
-            @stream-ready="onStreamReady"
-            @stream-ended="onStreamEnded"
-          />
+          <div class="w-full max-w-[320px]">
+            <CameraView
+              ref="cameraRef"
+              :auto-start="false"
+              @stream-ready="onStreamReady"
+              @stream-ended="onStreamEnded"
+            />
+          </div>
           <Message :severity="estadoSeverity" class="w-full">
             {{ estadoTexto }}
           </Message>
@@ -32,10 +34,6 @@
             <label for="carrera">Carrera</label>
             <Select id="carrera" v-model="carrera" :options="carreras" placeholder="Seleccionar carrera" />
           </div>
-          <div class="flex flex-col gap-1">
-            <label for="aula">Aula</label>
-            <Select id="aula" v-model="aulaId" :options="aulas" optionLabel="nombre" optionValue="id" placeholder="Seleccionar aula" />
-          </div>
           <Message v-if="mensaje" :severity="mensaje.tipo" :closable="false">{{ mensaje.texto }}</Message>
           <Button label="Registrar" icon="pi pi-save" @click="registrar" :disabled="btnRegistrarDisabled || cargando" :loading="cargando" />
         </div>
@@ -53,11 +51,9 @@ import { initFaceMesh, analizarRostro } from '../utils/faceValidator.js';
 
 const toast = useToast();
 const cameraRef = ref(null);
-const aulas = ref([]);
 const dni = ref('');
 const nombre = ref('');
 const carrera = ref(null);
-const aulaId = ref(null);
 const mensaje = ref(null);
 const cargando = ref(false);
 
@@ -155,7 +151,7 @@ function onStreamEnded() {
 }
 
 async function registrar() {
-    if (!dni.value || !nombre.value || !carrera.value || !aulaId.value) {
+    if (!dni.value || !nombre.value || !carrera.value) {
         mensaje.value = { tipo: 'warn', texto: 'Todos los campos son obligatorios' };
         return;
     }
@@ -176,13 +172,13 @@ async function registrar() {
         fd.append('dni', dni.value);
         fd.append('nombre', nombre.value);
         fd.append('carrera', carrera.value);
-        fd.append('aula_id', aulaId.value);
+        fd.append('aula_id', '');
         fd.append('foto', blob, 'captura.jpg');
         const res = await API.registrarRostro(fd);
         const data = await res.json();
         if (res.ok) {
             toast.add({ severity: 'success', summary: 'Registrado', detail: data.mensaje, life: 4000 });
-            dni.value = ''; nombre.value = ''; carrera.value = null; aulaId.value = null;
+            dni.value = ''; nombre.value = ''; carrera.value = null;
         } else {
             mensaje.value = { tipo: 'error', texto: data.detalle || 'Error al registrar' };
             toast.add({ severity: 'error', summary: 'Error', detail: data.detalle || 'Error al registrar', life: 4000 });
@@ -195,9 +191,6 @@ async function registrar() {
 }
 
 onMounted(async () => {
-    try {
-        aulas.value = await API.obtenerAulas();
-    } catch { }
     setTimeout(() => cameraRef.value?.toggleCam(), 800);
 });
 

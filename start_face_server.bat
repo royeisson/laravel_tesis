@@ -11,5 +11,5 @@ set DB_DATABASE=laravel_biometria
 set DB_USERNAME=postgres
 set DB_PASSWORD=postgres
 
-python python\face_server.py 5001
+python python\face_server_ws.py 5001
 pause

@@ -35,7 +35,7 @@
     </Card>
 
     <!-- Dialog Crear/Editar -->
-    <Dialog :key="dialogKey" v-model:visible="dialogoVisible" :header="esEditar ? 'Editar Coordinador' : 'Nuevo Coordinador'" :modal="true" :style="{ width: '400px' }">
+    <Dialog :key="dialogKey" v-model:visible="dialogoVisible" :header="esEditar ? 'Editar Coordinador' : 'Nuevo Coordinador'" :modal="true" :style="{ width: '90vw', maxWidth: '400px' }">
       <div class="flex flex-col gap-3">
         <div class="flex flex-col gap-1">
           <label>Nombre</label>
@@ -57,7 +57,7 @@
     </Dialog>
 
     <!-- Dialog Asignar Aulas -->
-    <Dialog v-model:visible="dialogoAulasVisible" header="Asignar Aulas" :modal="true" :style="{ width: '420px' }">
+    <Dialog v-model:visible="dialogoAulasVisible" header="Asignar Aulas" :modal="true" :style="{ width: '90vw', maxWidth: '420px' }">
       <div class="flex flex-col gap-3">
         <p class="text-sm text-gray-600">Selecciona las aulas para <strong>{{ coordinadorSeleccionado?.nombre }}</strong>:</p>
         <div class="flex flex-col gap-2 max-h-60 overflow-y-auto">
@@ -83,7 +83,7 @@
     </Dialog>
 
     <!-- Dialog Eliminar -->
-    <Dialog v-model:visible="dialogoEliminarVisible" header="Confirmar" :modal="true" :style="{ width: '350px' }">
+    <Dialog v-model:visible="dialogoEliminarVisible" header="Confirmar" :modal="true" :style="{ width: '90vw', maxWidth: '350px' }">
       <p>¿Eliminar a <strong>{{ coordinadorEliminar?.nombre }}</strong>?</p>
       <template #footer>
         <Button label="Cancelar" text @click="dialogoEliminarVisible = false" />

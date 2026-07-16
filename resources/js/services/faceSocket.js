@@ -1,6 +1,4 @@
-// Usar la IP del servidor automaticamente para acceso desde celular/tablet
-const WS_HOST = window.location.hostname || '127.0.0.1';
-const WS_URL = `ws://${WS_HOST}:5002`;
+const WS_URL = 'ws://127.0.0.1:5002';
 const RECONNECT_DELAY = 2000;
 
 class FaceSocket {

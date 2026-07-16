@@ -1,5 +1,5 @@
 <template>
-  <div class="flex items-center justify-center min-h-screen bg-gray-900 p-4">
+  <div class="flex items-center justify-center min-h-screen bg-gray-900 p-4 sm:p-6">
     <Card class="w-full max-w-sm shadow-2xl border-0">
       <template #content>
         <div class="flex flex-col items-center gap-5 py-2">
@@ -86,6 +86,8 @@ async function iniciarSesion() {
     if (res.exito) {
         if (res.rol === 'admin') {
             router.push('/registrar');
+        } else if (res.rol === 'guia') {
+            router.push('/guia/verificar');
         } else {
             router.push('/coordinador');
         }

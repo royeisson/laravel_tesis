@@ -10,6 +10,7 @@ import traceback
 import websockets
 import signal
 import sys
+from aiohttp import web
 
 # ==========================================
 # CONFIGURACION
@@ -172,6 +173,63 @@ def procesar_imagen(img_bytes):
         log(traceback.format_exc())
         return {'success': False, 'error': str(e)}
 
+def extraer_embedding_registro(img_bytes):
+    """Extrae embedding de un rostro para registro (validacion estricta)."""
+    try:
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return None, 'No se pudo decodificar imagen'
+
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        faces = app.get(rgb)
+
+        if len(faces) == 0:
+            return None, 'No se detecto rostro'
+        if len(faces) > 1:
+            return None, 'Se detectaron multiples rostros. Solo uno permitido.'
+
+        face = faces[0]
+        det_score = float(getattr(face, 'det_score', 0))
+        if det_score < 0.75:
+            return None, 'Rostro incompleto o tapado. Asegurate de que tu rostro completo sea visible de frente.'
+
+        kps = getattr(face, 'kps', None)
+        if kps is None or len(kps) < 5:
+            return None, 'No se detectaron puntos faciales completos. Rostro tapado o incompleto.'
+
+        left_eye = np.array(kps[0])
+        right_eye = np.array(kps[1])
+        nose = np.array(kps[2])
+
+        eye_dist = np.linalg.norm(left_eye - right_eye)
+        bbox = face.bbox.astype(float)
+        face_width = bbox[2] - bbox[0]
+        face_height = bbox[3] - bbox[1]
+
+        if eye_dist < face_width * 0.28:
+            return None, 'Rostro de perfil o incompleto. Mira directamente a la camara.'
+
+        aspect_ratio = face_height / face_width if face_width > 0 else 0
+        if aspect_ratio < 0.8 or aspect_ratio > 1.8:
+            return None, 'Rostro inclinado o posicion anormal.'
+
+        eyes_center_x = (left_eye[0] + right_eye[0]) / 2
+        if abs(nose[0] - eyes_center_x) > face_width * 0.15:
+            return None, 'Rostro girado. Mira directamente a la camara.'
+
+        face_area = face_width * face_height
+        frame_area = img.shape[1] * img.shape[0]
+        if face_area / frame_area < 0.015:
+            return None, 'Acercate un poco mas a la camara.'
+
+        embedding = face.normed_embedding.tolist()
+        return {'embedding': embedding}, None
+    except Exception as e:
+        log(f"[FaceServerWS] ERROR extrayendo embedding: {e}")
+        log(traceback.format_exc())
+        return None, str(e)
+
 # WebSocket handler
 async def handler(websocket):
     client_addr = websocket.remote_address
@@ -203,9 +261,49 @@ async def recargar_periodicamente():
         await asyncio.sleep(5)
         cargar_embeddings_desde_bd()
 
+# ==========================================
+# SERVIDOR HTTP (puerto 5001) - para registro y recarga
+# Comparte el mismo modelo InsightFace ya cargado
+# ==========================================
+async def http_registrar(request):
+    """Endpoint /registrar - extrae embedding de una imagen para registro."""
+    loop = asyncio.get_event_loop()
+    body = await request.read()
+    resultado, error = await loop.run_in_executor(EXECUTOR, extraer_embedding_registro, body)
+
+    if error:
+        return web.json_response({'success': False, 'error': error}, status=400)
+    return web.json_response({'success': True, 'embedding': resultado['embedding']})
+
+async def http_verificar(request):
+    """Endpoint /verificar - verifica rostros en una imagen."""
+    loop = asyncio.get_event_loop()
+    body = await request.read()
+    resultado = await loop.run_in_executor(EXECUTOR, procesar_imagen, body)
+    return web.json_response(resultado)
+
+async def http_reload(request):
+    """Endpoint /reload - recarga embeddings desde BD."""
+    cargar_embeddings_desde_bd()
+    return web.json_response({'success': True, 'mensaje': f'{len(EMBEDDINGS_DB)} embeddings recargados'})
+
+async def http_cors(request):
+    """Preflight CORS."""
+    return web.Response(status=200)
+
+def crear_app_http():
+    app_http = web.Application()
+    app_http.router.add_post('/registrar', http_registrar)
+    app_http.router.add_post('/verificar', http_verificar)
+    app_http.router.add_post('/reload', http_reload)
+    app_http.router.add_route('OPTIONS', '/{tail:.*}', http_cors)
+    return app_http
+
 async def main():
-    port = 5002
-    log(f"[FaceServerWS] Escuchando en ws://0.0.0.0:{port}")
+    ws_port = 5002
+    http_port = 5001
+    log(f"[FaceServerWS] WebSocket en ws://0.0.0.0:{ws_port}")
+    log(f"[FaceServerWS] HTTP en http://0.0.0.0:{http_port}")
     stop = asyncio.get_event_loop().create_future()
     original_set = SHUTDOWN_EVENT.set
     SHUTDOWN_EVENT.set = lambda: (original_set(), stop.done() or stop.set_result(None))
@@ -213,11 +311,21 @@ async def main():
     # Iniciar recarga periódica en segundo plano
     asyncio.create_task(recargar_periodicamente())
 
-    async with websockets.serve(handler, '0.0.0.0', port, max_size=5*1024*1024):
+    # Iniciar servidor HTTP (puerto 5001) para registro/verificar/reload
+    app_http = crear_app_http()
+    runner = web.AppRunner(app_http)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', http_port)
+    await site.start()
+    log(f"[FaceServerWS] Servidor HTTP listo en puerto {http_port}")
+
+    # Iniciar servidor WebSocket (puerto 5002) para verificación en tiempo real
+    async with websockets.serve(handler, '0.0.0.0', ws_port, max_size=5*1024*1024):
         try:
             await stop  # Espera señal de cierre
         except asyncio.CancelledError:
             pass
+    await runner.cleanup()
     log("[FaceServerWS] Servidor cerrado correctamente.")
 
 if __name__ == '__main__':
