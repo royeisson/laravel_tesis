@@ -54,10 +54,17 @@ class VerificacionController extends Controller
         return ['alumno' => $mejor, 'distancia' => $mejorDist];
     }
 
+    private function faceServerBaseUrl(): string
+    {
+        $host = env('FACE_SERVER_HOST', '127.0.0.1');
+        $port = env('FACE_SERVER_PORT', 5001);
+        return "http://{$host}:{$port}";
+    }
+
     private function recargarServidorPython()
     {
         try {
-            $ch = curl_init('http://127.0.0.1:5001/reload');
+            $ch = curl_init($this->faceServerBaseUrl() . '/reload');
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, '');
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -295,7 +302,7 @@ class VerificacionController extends Controller
         $imageData = file_get_contents($imagePath);
         if ($imageData === false) return null;
 
-        $ch = curl_init('http://127.0.0.1:5001/verificar');
+        $ch = curl_init($this->faceServerBaseUrl() . '/verificar');
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $imageData);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -306,7 +313,7 @@ class VerificacionController extends Controller
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        if ($response !== false && $httpCode === 200) {
+        if ($response !== false && in_array($httpCode, [200, 400], true)) {
             $decoded = json_decode($response, true);
             if ($decoded && isset($decoded['rostros'])) {
                 return $decoded;
@@ -320,7 +327,7 @@ class VerificacionController extends Controller
         $imageData = file_get_contents($imagePath);
         if ($imageData === false) return null;
 
-        $ch = curl_init('http://127.0.0.1:5001/registrar');
+        $ch = curl_init($this->faceServerBaseUrl() . '/registrar');
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $imageData);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -331,11 +338,8 @@ class VerificacionController extends Controller
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        if ($response !== false && $httpCode === 200) {
-            $decoded = json_decode($response, true);
-            if ($decoded && isset($decoded['success'])) {
-                return $decoded;
-            }
+        if ($response !== false && in_array($httpCode, [200, 400], true)) {
+            return json_decode($response, true) ?: null;
         }
         return null;
     }
