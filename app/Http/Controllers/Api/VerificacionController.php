@@ -6,45 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Alumno;
 use App\Models\RegistroAcceso;
 use Illuminate\Http\Request;
-use Symfony\Component\Process\Process;
-
 class VerificacionController extends Controller
 {
-    private function ejecutarPython(array $args): array
-    {
-        $pythonPath = base_path('python/face_helper.py');
-        $command = array_merge(['python', $pythonPath], $args);
-
-        $process = new Process($command);
-        $process->setTimeout(30);
-
-        $userProfile = $_SERVER['USERPROFILE'] ?? $_ENV['USERPROFILE'] ?? 'C:\\Users\\PC-01';
-        $process->setEnv([
-            'USERPROFILE' => $userProfile,
-            'HOME' => $userProfile,
-        ]);
-
-        $process->run();
-
-        $output = $process->getOutput();
-        $error = $process->getErrorOutput();
-
-        $lines = array_filter(array_map('trim', explode("\n", $output)));
-        $jsonLine = '';
-        foreach (array_reverse($lines) as $line) {
-            if (str_starts_with($line, '{') || str_starts_with($line, '[')) {
-                $jsonLine = $line;
-                break;
-            }
-        }
-
-        return [
-            'success' => $process->isSuccessful(),
-            'output' => $jsonLine ?: $output,
-            'error' => $error,
-        ];
-    }
-
     private function sanitizar(string $texto): string
     {
         return mb_convert_encoding($texto, 'UTF-8', 'UTF-8');
@@ -146,33 +109,15 @@ class VerificacionController extends Controller
                 ], 500);
             }
 
-            // 1. INTENTAR SERVIDOR RAPIDO (HTTP permanente en puerto 5001)
-            $serverResult = $this->llamarServidorRegistrar($imagePath);
-            if ($serverResult && isset($serverResult['success']) && $serverResult['success'] && isset($serverResult['embedding'])) {
-                $output = $serverResult;
-            } else {
-                // 2. FALLBACK: script Python tradicional (lento, carga modelos desde cero)
-                $result = $this->ejecutarPython(['registrar', $imagePath]);
-
-                if (!$result['success']) {
-                    if (file_exists($imagePath)) unlink($imagePath);
-                    $resultadoLog = 'Registro fallido: Error del motor - ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido');
-                    RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
-                    return response()->json([
-                        'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
-                    ], 422);
-                }
-
-                $output = json_decode($result['output'], true);
-
-                if (!$output || !$output['success']) {
-                    if (file_exists($imagePath)) unlink($imagePath);
-                    $resultadoLog = 'Registro fallido: ' . ($output['error'] ?? 'No se detectó rostro en la imagen');
-                    RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
-                    return response()->json([
-                        'detalle' => $output['error'] ?? 'No se detectó rostro en la imagen',
-                    ], 400);
-                }
+            $output = $this->llamarServidorRegistrar($imagePath);
+            if (!$output || !isset($output['success']) || !$output['success'] || !isset($output['embedding'])) {
+                if (file_exists($imagePath)) unlink($imagePath);
+                $detalle = $output['error'] ?? 'Servidor de reconocimiento facial no disponible';
+                $resultadoLog = 'Registro fallido: ' . $detalle;
+                RegistroAcceso::create(['dni' => $dniLog, 'resultado' => $resultadoLog, 'distancia' => null]);
+                return response()->json([
+                    'detalle' => $this->sanitizar($detalle),
+                ], 400);
             }
 
             $embedding = $output['embedding'];
@@ -232,98 +177,44 @@ class VerificacionController extends Controller
         $imagePath = $tempDir . DIRECTORY_SEPARATOR . $filename;
         $foto->move($tempDir, $filename);
 
-        // 1. INTENTAR SERVIDOR RAPIDO (HTTP permanente en puerto 5001)
         $serverResult = $this->llamarServidorPython($imagePath);
-        if ($serverResult && isset($serverResult['rostros']) && count($serverResult['rostros']) > 0) {
-            $rostro = $serverResult['rostros'][0];
-            if (file_exists($imagePath)) unlink($imagePath);
-
-            if ($rostro['conocido']) {
-                $resultado = 'Verificación exitosa';
-                $exitoso = true;
-                $nombre = $rostro['nombre'];
-                $carrera = $rostro['carrera'];
-                $aulaNombre = $rostro['aula_id'] ? (\App\Models\Aula::find($rostro['aula_id'])?->nombre ?? '—') : '—';
-                $dni = $rostro['dni'];
-                $fotoUrl = $rostro['foto_path'] ? asset('storage/fotos/' . $rostro['foto_path']) : null;
-                $mejorDist = $rostro['distancia'];
-            } else {
-                $resultado = 'Verificación fallida: Coincidencia no encontrada';
-                $exitoso = false;
-                $nombre = '—';
-                $carrera = '—';
-                $aulaNombre = '—';
-                $dni = '—';
-                $fotoUrl = null;
-                $mejorDist = 1.0;
-            }
-
-            RegistroAcceso::create([
-                'dni'       => $dni,
-                'resultado' => $resultado,
-                'distancia' => $mejorDist,
-            ]);
-
-            return response()->json([
-                'exitoso'    => $exitoso,
-                'mensaje'    => $resultado,
-                'nombre'     => $nombre,
-                'carrera'    => $carrera,
-                'aula'       => $aulaNombre,
-                'dni'        => $dni,
-                'foto_url'   => $fotoUrl,
-                'distancia'  => $mejorDist,
-                'timestamp'  => now()->toDateTimeString(),
-            ]);
-        }
-
-        // 2. FALLBACK: script Python tradicional (lento, carga modelos desde cero)
-        $result = $this->ejecutarPython(['verificar', $imagePath]);
 
         if (file_exists($imagePath)) unlink($imagePath);
 
-        if (!$result['success']) {
-            $resultadoLog = 'Verificación fallida: Error del motor - ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido');
+        if (!$serverResult) {
+            $resultadoLog = 'Verificación fallida: Servidor de reconocimiento facial no disponible';
             RegistroAcceso::create(['dni' => '—', 'resultado' => $resultadoLog, 'distancia' => null]);
             return response()->json([
-                'detalle' => $this->sanitizar('Error del motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido')),
-            ], 422);
+                'detalle' => 'Servidor de reconocimiento facial no disponible',
+            ], 503);
         }
 
-        $output = json_decode($result['output'], true);
-
-        if (!$output || !$output['success']) {
-            $resultadoLog = 'Verificación fallida: ' . ($output['error'] ?? 'No se detectó rostro');
-            RegistroAcceso::create(['dni' => '—', 'resultado' => $resultadoLog, 'distancia' => null]);
+        if (empty($serverResult['rostros'])) {
             return response()->json([
-                'detalle' => $output['error'] ?? 'No se detectó rostro',
+                'detalle' => 'No se detectó rostro',
             ], 400);
         }
 
-        $embedding = $output['embedding'];
+        $rostro = $serverResult['rostros'][0];
 
-        $busqueda = $this->buscarAlumnoPorEmbedding($embedding);
-        $mejor = $busqueda['alumno'];
-        $mejorDist = $busqueda['distancia'];
-        $umbral = 0.70;
-
-        $exitoso = false;
-
-        if ($mejor && $mejorDist <= $umbral) {
+        if ($rostro['conocido']) {
             $resultado = 'Verificación exitosa';
             $exitoso = true;
-            $nombre = $mejor->nombre;
-            $carrera = $mejor->carrera;
-            $aulaNombre = $mejor->aula?->nombre ?? '—';
-            $dni = $mejor->dni;
-            $fotoUrl = $mejor->foto_path ? asset('storage/fotos/' . $mejor->foto_path) : null;
+            $nombre = $rostro['nombre'];
+            $carrera = $rostro['carrera'];
+            $aulaNombre = $rostro['aula_id'] ? (\App\Models\Aula::find($rostro['aula_id'])?->nombre ?? '—') : '—';
+            $dni = $rostro['dni'];
+            $fotoUrl = $rostro['foto_path'] ? asset('storage/fotos/' . $rostro['foto_path']) : null;
+            $mejorDist = $rostro['distancia'];
         } else {
             $resultado = 'Verificación fallida: Coincidencia no encontrada';
+            $exitoso = false;
             $nombre = '—';
             $carrera = '—';
             $aulaNombre = '—';
             $dni = '—';
             $fotoUrl = null;
+            $mejorDist = 1.0;
         }
 
         RegistroAcceso::create([
@@ -362,20 +253,20 @@ class VerificacionController extends Controller
             ]);
         }
 
-        $result = $this->ejecutarPython(['validar', $imagePath]);
-
-        $output = json_decode($result['output'], true);
-
+        $serverResult = $this->llamarServidorPython($imagePath);
         if (file_exists($imagePath)) unlink($imagePath);
 
-        $mensaje = $output['mensaje'] ?? 'Rostro no detectado';
-        if (!$result['success']) {
-            $mensaje = $this->sanitizar('Error motor: ' . ($result['error'] ?: $result['output'] ?: 'fallo desconocido'));
+        if (!$serverResult) {
+            return response()->json([
+                'rostro_detectado' => false,
+                'mensaje' => 'Servidor de reconocimiento facial no disponible',
+            ], 503);
         }
 
+        $detectado = !empty($serverResult['rostros']);
         return response()->json([
-            'rostro_detectado' => ($output['valido'] ?? false) && $result['success'],
-            'mensaje'          => $mensaje,
+            'rostro_detectado' => $detectado,
+            'mensaje'          => $detectado ? 'Rostro listo para registrar' : 'Rostro no detectado',
         ]);
     }
 
@@ -389,27 +280,14 @@ class VerificacionController extends Controller
         $imagePath = $tempDir . DIRECTORY_SEPARATOR . $filename;
         $foto->move($tempDir, $filename);
 
-        // 1. Intentar servidor Python permanente (rapido)
         $serverResult = $this->llamarServidorPython($imagePath);
-        if ($serverResult) {
-            if (file_exists($imagePath)) unlink($imagePath);
-            return $this->procesarResultadoMasivo($serverResult, $request);
-        }
-
-        // 2. Fallback: script Python tradicional (lento)
-        $result = $this->ejecutarPython(['verificar_multi', $imagePath]);
         if (file_exists($imagePath)) unlink($imagePath);
 
-        if (!$result['success']) {
-            return response()->json(['conocido' => false, 'mensaje' => 'Error del motor'], 422);
+        if (!$serverResult) {
+            return response()->json(['conocido' => false, 'mensaje' => 'Servidor de reconocimiento facial no disponible'], 503);
         }
 
-        $output = json_decode($result['output'], true);
-        if (!$output || !$output['success']) {
-            return response()->json(['conocido' => false, 'mensaje' => $output['error'] ?? 'No se detectó rostro'], 400);
-        }
-
-        return $this->procesarResultadoMasivo($output, $request);
+        return $this->procesarResultadoMasivo($serverResult, $request);
     }
 
     private function llamarServidorPython(string $imagePath): ?array

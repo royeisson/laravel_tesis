@@ -1,120 +1,264 @@
-import sys
+import asyncio
+import concurrent.futures
 import json
+import os
+import signal
+import sys
+import traceback
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
 import cv2
 import numpy as np
-import insightface
+import websockets
+from aiohttp import web
 from insightface.app import FaceAnalysis
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import os
-import traceback
 
-# Log a archivo para depuracion
-LOG_FILE = os.path.join(os.path.dirname(__file__), 'face_server.log')
-def log(msg):
-    with open(LOG_FILE, 'a') as f:
-        f.write(msg + '\n')
-    print(msg, flush=True)
 
-log("[FaceServer] Iniciando...")
+# ============== CONFIGURACION ==============
+@dataclass(frozen=True)
+class Config:
+    model_name: str = 'buffalo_l'
+    det_size: Tuple[int, int] = (320, 320)
+    http_port: int = 5001
+    ws_port: int = 5002
+    gpu_providers: Tuple[str, ...] = ('CUDAExecutionProvider', 'CPUExecutionProvider')
+    cpu_providers: Tuple[str, ...] = ('CPUExecutionProvider',)
+    min_detection_score: float = 0.50
+    min_registration_score: float = 0.75
+    max_cosine_distance: float = 0.55
+    min_eye_distance_ratio: float = 0.28
+    min_face_area_ratio: float = 0.015
+    center_min_ratio: float = 0.15
+    center_max_ratio: float = 0.85
+    aspect_ratio_min: float = 0.8
+    aspect_ratio_max: float = 1.8
+    nose_center_tolerance: float = 0.15
+    reload_interval_seconds: int = 5
+    log_file: str = os.path.join(os.path.dirname(__file__), 'face_server.log')
 
-EMBEDDINGS_DB = []
+    def db_params(self):
+        return {
+            'host': os.environ.get('DB_HOST', '127.0.0.1'),
+            'port': os.environ.get('DB_PORT', '5433'),
+            'database': os.environ.get('DB_DATABASE', 'laravel_biometria'),
+            'user': os.environ.get('DB_USERNAME', 'postgres'),
+            'password': os.environ.get('DB_PASSWORD', 'postgres'),
+        }
 
-def cargar_embeddings_desde_bd():
-    global EMBEDDINGS_DB
-    try:
-        import psycopg2
-        db_host = os.environ.get('DB_HOST', '127.0.0.1')
-        db_port = os.environ.get('DB_PORT', '5433')
-        db_name = os.environ.get('DB_DATABASE', 'laravel_biometria')
-        db_user = os.environ.get('DB_USERNAME', 'postgres')
-        db_pass = os.environ.get('DB_PASSWORD', 'postgres')
 
-        log(f"[FaceServer] Conectando a BD: {db_host}:{db_port}/{db_name}")
-        conn = psycopg2.connect(
-            host=db_host, port=db_port, database=db_name,
-            user=db_user, password=db_pass
-        )
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, dni, nombre, carrera, aula_id, estado, foto_path,
-                   vector_rostro::text
-            FROM alumnos
-            WHERE vector_rostro IS NOT NULL
-        """)
-        rows = cur.fetchall()
-        for row in rows:
-            vec_text = row[7]
-            vec_text = vec_text.replace('{', '[').replace('}', ']')
-            vec = json.loads(vec_text)
-            EMBEDDINGS_DB.append({
-                'id': row[0],
-                'dni': row[1],
-                'nombre': row[2],
-                'carrera': row[3],
-                'aula_id': row[4],
-                'estado': row[5],
-                'foto_path': row[6],
-                'embedding': np.array(vec, dtype=np.float32),
-            })
-        cur.close()
-        conn.close()
-        log(f"[FaceServer] {len(EMBEDDINGS_DB)} embeddings cargados desde BD")
-    except Exception as e:
-        log(f"[FaceServer] ERROR cargando BD: {e}")
-        log(traceback.format_exc())
+# ============== LOGGER ==============
+class Logger:
+    def __init__(self, log_file: str):
+        self.log_file = log_file
 
-log("[FaceServer] Cargando modelo InsightFace...")
-app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-app.prepare(ctx_id=0, det_size=(320, 320))
-log("[FaceServer] Modelo listo.")
+    def info(self, msg: str) -> None:
+        self._write('INFO', msg)
 
-cargar_embeddings_desde_bd()
+    def error(self, msg: str) -> None:
+        self._write('ERROR', msg)
 
-def cosine_distance(a, b):
-    dot = np.dot(a, b)
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0 or norm_b == 0:
-        return 2.0
-    return 1.0 - (dot / (norm_a * norm_b))
+    def exception(self, msg: str) -> None:
+        self.error(msg)
+        self._write('TRACE', traceback.format_exc())
 
-def buscar_mejor_coincidencia(embedding):
-    mejor = None
-    mejor_dist = 1.5
-    for alumno in EMBEDDINGS_DB:
-        dist = cosine_distance(embedding, alumno['embedding'])
-        if dist < mejor_dist:
-            mejor_dist = dist
-            mejor = alumno
-    return mejor, mejor_dist
+    def _write(self, level: str, msg: str) -> None:
+        line = f"[{level}] {msg}"
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write(line + '\n')
+        except Exception:
+            pass
+        print(line, flush=True)
 
-def procesar_imagen(img_bytes):
-    try:
+
+# ============== REPOSITORIO DE EMBEDDINGS (Single Responsibility: cargar datos) ==============
+class EmbeddingRepository:
+    def __init__(self, config: Config, logger: Logger):
+        self.config = config
+        self.logger = logger
+
+    def fetch_all(self) -> List[dict]:
+        try:
+            import psycopg2
+            params = self.config.db_params()
+            self.logger.info(f"Conectando a BD: {params['host']}:{params['port']}/{params['database']}")
+            with psycopg2.connect(**params) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id, dni, nombre, carrera, aula_id, estado, foto_path,
+                               vector_rostro::text
+                        FROM alumnos
+                        WHERE vector_rostro IS NOT NULL
+                    """)
+                    rows = cur.fetchall()
+            embeddings = []
+            for row in rows:
+                vec_text = row[7].replace('{', '[').replace('}', ']')
+                vec = json.loads(vec_text)
+                embeddings.append({
+                    'id': row[0],
+                    'dni': row[1],
+                    'nombre': row[2],
+                    'carrera': row[3],
+                    'aula_id': row[4],
+                    'estado': row[5],
+                    'foto_path': row[6],
+                    'embedding': np.array(vec, dtype=np.float32),
+                })
+            self.logger.info(f"{len(embeddings)} embeddings cargados desde BD")
+            return embeddings
+        except Exception as e:
+            self.logger.exception(f"ERROR cargando BD: {e}")
+            return []
+
+
+# ============== MODELO DE ROSTROS (Single Responsibility: inferencia) ==============
+class FaceModel:
+    def __init__(self, config: Config, logger: Logger):
+        self.config = config
+        self.logger = logger
+        self._app = self._load_model()
+
+    def _load_model(self) -> FaceAnalysis:
+        self.logger.info("Cargando modelo InsightFace (intentando GPU/CUDA)...")
+        try:
+            app = FaceAnalysis(name=self.config.model_name, providers=list(self.config.gpu_providers))
+            self.logger.info("CUDA/GPU disponible y activo")
+        except Exception as e:
+            self.logger.error(f"CUDA no disponible, usando CPU: {e}")
+            app = FaceAnalysis(name=self.config.model_name, providers=list(self.config.cpu_providers))
+        app.prepare(ctx_id=0, det_size=self.config.det_size)
+        self.logger.info("Modelo listo.")
+        return app
+
+    def detect_faces(self, img: np.ndarray):
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return self._app.get(rgb)
+
+
+# ============== SERVICIO DE VALIDACION (Open/Closed: reglas intercambiables) ==============
+class FaceValidator:
+    def __init__(self, config: Config):
+        self.config = config
+
+    def validate_registration(self, face, img_w: int, img_h: int) -> Tuple[bool, str]:
+        if float(getattr(face, 'det_score', 0)) < self.config.min_registration_score:
+            return False, 'Rostro incompleto o tapado. Asegurate de que tu rostro completo sea visible de frente.'
+
+        kps = getattr(face, 'kps', None)
+        if kps is None or len(kps) < 5:
+            return False, 'No se detectaron puntos faciales completos. Rostro tapado o incompleto.'
+
+        left_eye, right_eye, nose, mouth_left, mouth_right = (np.array(kps[i]) for i in range(5))
+        eye_dist = np.linalg.norm(left_eye - right_eye)
+        bbox = face.bbox.astype(float)
+        face_width = bbox[2] - bbox[0]
+        face_height = bbox[3] - bbox[1]
+
+        if eye_dist < face_width * self.config.min_eye_distance_ratio:
+            return False, 'Rostro de perfil o incompleto. Mira directamente a la camara.'
+
+        aspect_ratio = face_height / face_width if face_width > 0 else 0
+        if aspect_ratio < self.config.aspect_ratio_min or aspect_ratio > self.config.aspect_ratio_max:
+            return False, 'Rostro inclinado o posicion anormal.'
+
+        eyes_center_x = (left_eye[0] + right_eye[0]) / 2
+        if abs(nose[0] - eyes_center_x) > face_width * self.config.nose_center_tolerance:
+            return False, 'Rostro girado. Mira directamente a la camara.'
+
+        eyes_center_y = (left_eye[1] + right_eye[1]) / 2
+        if nose[1] <= eyes_center_y:
+            return False, 'Rostro incompleto. Posicion facial anormal.'
+
+        mouth_y = (mouth_left[1] + mouth_right[1]) / 2
+        if mouth_y <= nose[1]:
+            return False, 'Rostro incompleto. Boca no detectada.'
+
+        face_area = face_width * face_height
+        frame_area = img_w * img_h
+        if face_area / frame_area < self.config.min_face_area_ratio:
+            return False, 'Acercate un poco mas a la camara.'
+
+        if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > img_w or bbox[3] > img_h:
+            return False, 'Rostro cortado. Acomodate mejor en el ovalo.'
+
+        centro_x = (bbox[0] + bbox[2]) / 2
+        if centro_x < img_w * self.config.center_min_ratio or centro_x > img_w * self.config.center_max_ratio:
+            return False, 'Centra tu rostro en el ovalo.'
+
+        return True, 'Rostro listo'
+
+    def is_detectable(self, face) -> bool:
+        if float(getattr(face, 'det_score', 0)) < self.config.min_detection_score:
+            return False
+        kps = getattr(face, 'kps', None)
+        return kps is not None and len(kps) >= 5
+
+
+# ============== SERVICIO DE EMPAREJAMIENTO ==============
+class FaceMatcher:
+    def __init__(self, repository: EmbeddingRepository):
+        self.repository = repository
+        self.embeddings: List[dict] = []
+
+    def reload(self) -> None:
+        self.embeddings = self.repository.fetch_all()
+
+    def find_best_match(self, embedding: np.ndarray) -> Tuple[Optional[dict], float]:
+        best = None
+        best_dist = 1.5
+        for alumno in self.embeddings:
+            dist = self.cosine_distance(embedding, alumno['embedding'])
+            if dist < best_dist:
+                best_dist = dist
+                best = alumno
+        return best, best_dist
+
+    @staticmethod
+    def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
+        dot = np.dot(a, b)
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 2.0
+        return 1.0 - (dot / (norm_a * norm_b))
+
+
+# ============== DECODIFICADOR DE IMAGEN ==============
+class ImageDecoder:
+    @staticmethod
+    def decode(img_bytes: bytes) -> Optional[np.ndarray]:
         nparr = np.frombuffer(img_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        return img
+
+
+# ============== CASOS DE USO (Application layer) ==============
+class VerifyFacesUseCase:
+    def __init__(self, model: FaceModel, matcher: FaceMatcher, validator: FaceValidator, config: Config):
+        self.model = model
+        self.matcher = matcher
+        self.validator = validator
+        self.config = config
+
+    def execute(self, img_bytes: bytes) -> dict:
+        img = ImageDecoder.decode(img_bytes)
         if img is None:
             return {'success': False, 'error': 'No se pudo decodificar imagen'}
 
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        faces = app.get(rgb)
-
+        faces = self.model.detect_faces(img)
         resultados = []
         for face in faces:
-            det_score = float(getattr(face, 'det_score', 0))
-            if det_score < 0.50:
+            if not self.validator.is_detectable(face):
                 continue
-            kps = getattr(face, 'kps', None)
-            if kps is None or len(kps) < 5:
-                continue
-
             embedding = face.normed_embedding
             if embedding is None or len(embedding) == 0:
                 continue
-
             bbox = face.bbox.astype(int).tolist()
-            mejor, dist = buscar_mejor_coincidencia(embedding)
+            mejor, dist = self.matcher.find_best_match(embedding)
 
-            if mejor and dist <= 0.55:
+            if mejor and dist <= self.config.max_cosine_distance:
                 resultados.append({
                     'conocido': True,
                     'dni': mejor['dni'],
@@ -128,171 +272,158 @@ def procesar_imagen(img_bytes):
                     'confianza': round((1 - float(dist)) * 100),
                 })
             else:
-                resultados.append({
-                    'conocido': False,
-                    'bbox': bbox,
-                })
+                resultados.append({'conocido': False, 'bbox': bbox})
 
         return {'success': True, 'rostros': resultados}
-    except Exception as e:
-        log(f"[FaceServer] ERROR procesando imagen: {e}")
-        log(traceback.format_exc())
-        return {'success': False, 'error': str(e)}
 
-def extraer_embedding(img_bytes):
-    """Extrae embedding de un rostro para registro (validacion estricta)."""
-    try:
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+class RegisterFaceUseCase:
+    def __init__(self, model: FaceModel, validator: FaceValidator):
+        self.model = model
+        self.validator = validator
+
+    def execute(self, img_bytes: bytes) -> Tuple[Optional[dict], Optional[str]]:
+        img = ImageDecoder.decode(img_bytes)
         if img is None:
             return None, 'No se pudo decodificar imagen'
 
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        faces = app.get(rgb)
-
+        faces = self.model.detect_faces(img)
         if len(faces) == 0:
             return None, 'No se detecto rostro'
         if len(faces) > 1:
             return None, 'Se detectaron multiples rostros. Solo uno permitido.'
 
         face = faces[0]
-        det_score = float(getattr(face, 'det_score', 0))
-        if det_score < 0.75:
-            return None, 'Rostro incompleto o tapado. Asegurate de que tu rostro completo sea visible de frente.'
-
-        kps = getattr(face, 'kps', None)
-        if kps is None or len(kps) < 5:
-            return None, 'No se detectaron puntos faciales completos. Rostro tapado o incompleto.'
-
-        left_eye = np.array(kps[0])
-        right_eye = np.array(kps[1])
-        nose = np.array(kps[2])
-        mouth_left = np.array(kps[3])
-        mouth_right = np.array(kps[4])
-
-        eye_dist = np.linalg.norm(left_eye - right_eye)
-        bbox = face.bbox.astype(float)
-        face_width = bbox[2] - bbox[0]
-        face_height = bbox[3] - bbox[1]
-
-        if eye_dist < face_width * 0.28:
-            return None, 'Rostro de perfil o incompleto. Mira directamente a la camara.'
-
-        aspect_ratio = face_height / face_width if face_width > 0 else 0
-        if aspect_ratio < 0.8 or aspect_ratio > 1.8:
-            return None, 'Rostro inclinado o posicion anormal.'
-
-        eyes_center_x = (left_eye[0] + right_eye[0]) / 2
-        if abs(nose[0] - eyes_center_x) > face_width * 0.15:
-            return None, 'Rostro girado. Mira directamente a la camara.'
-
-        eyes_center_y = (left_eye[1] + right_eye[1]) / 2
-        if nose[1] <= eyes_center_y:
-            return None, 'Rostro incompleto. Posicion facial anormal.'
-
-        mouth_y = (mouth_left[1] + mouth_right[1]) / 2
-        if mouth_y <= nose[1]:
-            return None, 'Rostro incompleto. Boca no detectada.'
-
-        face_area = face_width * face_height
-        frame_area = img.shape[1] * img.shape[0]
-        if face_area / frame_area < 0.015:
-            return None, 'Acercate un poco mas a la camara.'
-
-        if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > img.shape[1] or bbox[3] > img.shape[0]:
-            return None, 'Rostro cortado. Acomodate mejor en el ovalo.'
-
-        centro_x = (bbox[0] + bbox[2]) / 2
-        if centro_x < img.shape[1] * 0.15 or centro_x > img.shape[1] * 0.85:
-            return None, 'Centra tu rostro en el ovalo.'
+        valido, msg = self.validator.validate_registration(face, img.shape[1], img.shape[0])
+        if not valido:
+            return None, msg
 
         embedding = face.normed_embedding.tolist()
         return {'embedding': embedding}, None
-    except Exception as e:
-        log(f"[FaceServer] ERROR extrayendo embedding: {e}")
-        log(traceback.format_exc())
-        return None, str(e)
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        pass
 
-    def do_POST(self):
+# ============== SERVIDORES HTTP Y WEBSOCKET ==============
+class FaceServer:
+    def __init__(self, config: Config, logger: Logger):
+        self.config = config
+        self.logger = logger
+        self.matcher = None
+        self.verify_use_case = None
+        self.register_use_case = None
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.shutdown_event = asyncio.Event()
+
+    def bootstrap(self) -> None:
+        repository = EmbeddingRepository(self.config, self.logger)
+        model = FaceModel(self.config, self.logger)
+        validator = FaceValidator(self.config)
+        self.matcher = FaceMatcher(repository)
+        self.matcher.reload()
+        self.verify_use_case = VerifyFacesUseCase(model, self.matcher, validator, self.config)
+        self.register_use_case = RegisterFaceUseCase(model, validator)
+
+    async def http_register(self, request: web.Request) -> web.Response:
+        loop = asyncio.get_event_loop()
+        body = await request.read()
+        resultado, error = await loop.run_in_executor(self.executor, self.register_use_case.execute, body)
+        if error:
+            return web.json_response({'success': False, 'error': error}, status=400)
+        return web.json_response({'success': True, 'embedding': resultado['embedding']})
+
+    async def http_verify(self, request: web.Request) -> web.Response:
+        loop = asyncio.get_event_loop()
+        body = await request.read()
+        resultado = await loop.run_in_executor(self.executor, self.verify_use_case.execute, body)
+        return web.json_response(resultado)
+
+    async def http_reload(self, request: web.Request) -> web.Response:
+        self.matcher.reload()
+        return web.json_response({
+            'success': True,
+            'mensaje': f'{len(self.matcher.embeddings)} embeddings recargados'
+        })
+
+    async def http_cors(self, request: web.Request) -> web.Response:
+        return web.Response(status=200)
+
+    async def websocket_handler(self, websocket):
+        client_addr = websocket.remote_address
+        self.logger.info(f"Cliente conectado: {client_addr}")
+        loop = asyncio.get_event_loop()
         try:
-            if self.path == '/reload':
-                log("[FaceServer] Recargando embeddings desde BD...")
-                EMBEDDINGS_DB.clear()
-                cargar_embeddings_desde_bd()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': True, 'mensaje': f'{len(EMBEDDINGS_DB)} embeddings recargados'}).encode())
-                return
-
-            if self.path == '/verificar':
-                content_length = int(self.headers.get('Content-Length', 0))
-                if content_length == 0:
-                    self.send_response(400)
-                    self.end_headers()
-                    return
-
-                body = self.rfile.read(content_length)
-                resultado = procesar_imagen(body)
-
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(resultado).encode())
-                return
-
-            if self.path == '/registrar':
-                content_length = int(self.headers.get('Content-Length', 0))
-                if content_length == 0:
-                    self.send_response(400)
-                    self.end_headers()
-                    return
-
-                body = self.rfile.read(content_length)
-                resultado, error = extraer_embedding(body)
-
-                if error:
-                    self.send_response(400)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({'success': False, 'error': error}).encode())
-                else:
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({'success': True, 'embedding': resultado['embedding']}).encode())
-                return
-
-            self.send_response(404)
-            self.end_headers()
-
+            async for message in websocket:
+                if isinstance(message, bytes):
+                    resultado = await loop.run_in_executor(self.executor, self.verify_use_case.execute, message)
+                    await websocket.send(json.dumps(resultado))
+                elif isinstance(message, str):
+                    data = json.loads(message)
+                    if data.get('action') == 'reload':
+                        self.matcher.reload()
+                        await websocket.send(json.dumps({
+                            'success': True,
+                            'mensaje': f'{len(self.matcher.embeddings)} embeddings recargados'
+                        }))
+                    else:
+                        await websocket.send(json.dumps({'success': False, 'error': 'Accion desconocida'}))
+        except websockets.exceptions.ConnectionClosed:
+            self.logger.info(f"Cliente desconectado: {client_addr}")
         except Exception as e:
-            log(f"[FaceServer] ERROR en request: {e}")
-            self.send_response(500)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+            self.logger.error(f"ERROR WebSocket: {e}")
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
+    async def periodic_reload(self) -> None:
+        while not self.shutdown_event.is_set():
+            await asyncio.sleep(self.config.reload_interval_seconds)
+            self.matcher.reload()
 
+    def _setup_signal_handlers(self):
+        def handle_signal(signum, frame):
+            self.logger.info(f"Señal recibida ({signum}), cerrando servidor...")
+            self.shutdown_event.set()
+
+        if sys.platform == 'win32':
+            signal.signal(signal.SIGBREAK, handle_signal)
+        else:
+            signal.signal(signal.SIGTERM, handle_signal)
+            signal.signal(signal.SIGINT, handle_signal)
+
+    async def run(self) -> None:
+        self._setup_signal_handlers()
+        self.bootstrap()
+
+        app_http = web.Application()
+        app_http.router.add_post('/registrar', self.http_register)
+        app_http.router.add_post('/verificar', self.http_verify)
+        app_http.router.add_post('/reload', self.http_reload)
+        app_http.router.add_route('OPTIONS', '/{tail:.*}', self.http_cors)
+
+        runner = web.AppRunner(app_http)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', self.config.http_port)
+        await site.start()
+        self.logger.info(f"HTTP en http://0.0.0.0:{self.config.http_port}")
+
+        asyncio.create_task(self.periodic_reload())
+
+        stop = asyncio.get_event_loop().create_future()
+        original_set = self.shutdown_event.set
+        self.shutdown_event.set = lambda: (original_set(), stop.done() or stop.set_result(None))
+
+        self.logger.info(f"WebSocket en ws://0.0.0.0:{self.config.ws_port}")
+        async with websockets.serve(self.websocket_handler, '0.0.0.0', self.config.ws_port, max_size=5*1024*1024):
+            try:
+                await stop
+            except asyncio.CancelledError:
+                pass
+
+        await runner.cleanup()
+        self.logger.info("Servidor cerrado correctamente.")
+
+
+# ============== PUNTO DE ENTRADA ==============
 if __name__ == '__main__':
-    port = 5001
+    config = Config()
     if len(sys.argv) > 1:
-        port = int(sys.argv[1])
-    server = HTTPServer(('0.0.0.0', port), Handler)
-    log(f"[FaceServer] Escuchando en http://0.0.0.0:{port}")
-    server.serve_forever()
+        config = Config(http_port=int(sys.argv[1]), ws_port=int(sys.argv[1]) + 1)
 
+    server = FaceServer(config, Logger(config.log_file))
+    asyncio.run(server.run())

@@ -1,0 +1,7 @@
+insightface>=0.7.3
+onnxruntime>=1.24.1
+opencv-python-headless>=4.9.0.80
+numpy>=1.26.4,<2.0
+psycopg2-binary>=2.9.9
+aiohttp>=3.9.5
+websockets>=12.0
