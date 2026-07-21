@@ -56,6 +56,10 @@ class VerificacionController extends Controller
 
     private function faceServerBaseUrl(): string
     {
+        if (env('FACE_SERVER_URL')) {
+            return env('FACE_SERVER_URL');
+        }
+
         $host = env('FACE_SERVER_HOST', '127.0.0.1');
         $port = env('FACE_SERVER_PORT', 5001);
         return "http://{$host}:{$port}";

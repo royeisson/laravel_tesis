@@ -40,8 +40,8 @@ class Config:
     def db_params(self):
         return {
             'host': os.environ.get('DB_HOST', '127.0.0.1'),
-            'port': os.environ.get('DB_PORT', '5433'),
-            'database': os.environ.get('DB_DATABASE', 'laravel_biometria'),
+            'port': os.environ.get('DB_PORT', '5432'),
+            'database': os.environ.get('DB_DATABASE', 'laravel'),
             'user': os.environ.get('DB_USERNAME', 'postgres'),
             'password': os.environ.get('DB_PASSWORD', 'postgres'),
         }
@@ -346,6 +346,9 @@ class FaceServer:
     async def http_cors(self, request: web.Request) -> web.Response:
         return web.Response(status=200)
 
+    async def http_up(self, request: web.Request) -> web.Response:
+        return web.json_response({'status': 'ok'}, status=200)
+
     async def websocket_handler(self, websocket):
         client_addr = websocket.remote_address
         self.logger.info(f"Cliente conectado: {client_addr}")
@@ -394,6 +397,7 @@ class FaceServer:
         app_http.router.add_post('/registrar', self.http_register)
         app_http.router.add_post('/verificar', self.http_verify)
         app_http.router.add_post('/reload', self.http_reload)
+        app_http.router.add_get('/up', self.http_up)
         app_http.router.add_route('OPTIONS', '/{tail:.*}', self.http_cors)
 
         runner = web.AppRunner(app_http)

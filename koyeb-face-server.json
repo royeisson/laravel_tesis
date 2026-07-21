@@ -1,0 +1,65 @@
+{
+  "name": "face-server-tesis",
+  "type": "WEB",
+  "strategy": {
+    "type": "DEPLOYMENT_STRATEGY_TYPE_ROLLING"
+  },
+  "routes": [
+    {
+      "port": 8000,
+      "path": "/"
+    }
+  ],
+  "ports": [
+    {
+      "port": 8000,
+      "protocol": "http"
+    }
+  ],
+  "env": [
+    { "key": "DB_HOST", "value": "REEMPLAZAR_CON_HOST_POSTGRES" },
+    { "key": "DB_PORT", "value": "5432" },
+    { "key": "DB_DATABASE", "value": "REEMPLAZAR_CON_DATABASE" },
+    { "key": "DB_USERNAME", "value": "REEMPLAZAR_CON_USER" },
+    { "key": "DB_PASSWORD", "value": "REEMPLAZAR_CON_PASSWORD" }
+  ],
+  "regions": ["was"],
+  "scalings": [
+    {
+      "scopes": ["region:was"],
+      "min": 1,
+      "max": 1,
+      "targets": []
+    }
+  ],
+  "instance_types": [
+    {
+      "scopes": ["region:was"],
+      "type": "nano"
+    }
+  ],
+  "health_checks": [
+    {
+      "grace_period": 120,
+      "interval": 30,
+      "restart_limit": 3,
+      "timeout": 10,
+      "http": {
+        "path": "/up",
+        "port": 8000
+      }
+    }
+  ],
+  "git": {
+    "repository": "github.com/royeisson/laravel_tesis",
+    "branch": "main",
+    "docker": {
+      "dockerfile": "docker/koyeb/python/Dockerfile",
+      "entrypoint": [],
+      "command": [],
+      "args": [],
+      "target": "",
+      "privileged": false
+    }
+  }
+}
